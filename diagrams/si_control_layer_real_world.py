@@ -215,6 +215,8 @@ text(1800, 385, "the only agent loop", 24, 500, MUTED, "start")
 badge(3360, 340, "live", LIVE, 20)
 text(1800, 460, "Choose tool → read JSON → call model", 24, 500, BLACK, "start")
 text(1800, 500, "Budget · fail closed with Guard", 24, 500, BLACK, "start")
+text(1800, 580, "Owns the MCP catalog · calls each MCP", 24, 700, LIVE, "start")
+text(1800, 620, "MCPs run as separate services, one secret each", 24, 500, MUTED, "start")
 
 # Model
 box(3480, 280, 4340, 780, BG_SOFT, STROKE_SOFT, 4)
@@ -242,7 +244,7 @@ MCP_Y0, MCP_Y1 = 1200, 1880
 slots = [
     (60, 1080, "Microsoft 365 MCP", "Productivity · Microsoft Graph", "live", LIVE, BG_LIVE),
     (1160, 2180, "ERP MCP", "D365 / Dataverse", "sample live", LIVE, BG_LIVE),
-    (2260, 3280, "Engineering MCP", "GitHub · ADO", "sample live", LIVE, BG_LIVE),
+    (2260, 3280, "Engineering MCP", "GitHub · read-only", "live", LIVE, BG_LIVE),
     (3360, 4340, "Data MCP", "Postgres facts", "design", TARGET, BG_STORE),
 ]
 for (x0, x1, title, sub, bad, bfill, fill) in slots:
@@ -281,7 +283,7 @@ node("mcp_data", 3850, 1480, "mcp_deploy.png", ["Data"], 88)
 
 node("graph", 570, 2260, "azure/identity/app-registrations.png", ["Microsoft Graph", "mail · calendar · OneDrive"], 80)
 node("d365", 1670, 2260, "azure/web/power-platform.png", ["D365 / Dataverse"], 80)
-node("ghado", 2770, 2260, "github.png", ["GitHub · ADO"], 80)
+node("ghado", 2770, 2260, "github.png", ["GitHub"], 80)
 node("pgfacts", 3850, 2260, "onprem/database/postgresql.png", ["Postgres facts"], 80)
 
 node("pbi", 4990, 560, "onprem/analytics/powerbi.png", ["Power BI", "Desktop"], 110)
@@ -290,7 +292,7 @@ node("pgwh", 4990, 1100, "onprem/database/postgresql.png", ["Postgres", "warehou
 # Short system credential hints under systems icons
 text(570, 2420, "Entra app · delegated, read-only", 22, 500, MUTED)
 text(1670, 2420, "Entra app", 22, 500, MUTED)
-text(2770, 2420, "token / App / PAT", 22, 500, MUTED)
+text(2770, 2420, "read-only token · ADO later", 22, 500, MUTED)
 text(3850, 2420, "DB read role", 22, 500, MUTED)
 
 # Power BI body text (short)
@@ -304,7 +306,7 @@ text(4480, 1320, "data MCP can read", 24, 500, BLACK, "start")
 # -----------------------------------------------------------------------------
 box(60, 2560, 4340, 2780, BG_SOFT, STROKE_SOFT, 3)
 text(100, 2640, "Cross-share", 33, 800, BLACK, "start")
-text(100, 2700, "MCPs do not peer · the control layer accumulates results in one loop", 26, 500, MUTED, "start")
+text(100, 2700, "MCPs do not peer · the control layer owns the catalog and accumulates results in one loop", 26, 500, MUTED, "start")
 
 # -----------------------------------------------------------------------------
 # Copilot banner (ONE short banner)
@@ -337,7 +339,7 @@ for i, s in enumerate(steps):
 text(100, 3620, "Power BI path (separate): Postgres warehouse → Power BI Desktop → charts", 26, 600, REPORT, "start")
 text(100, 3680, "Observability (quiet): Langfuse traces hops · Grafana ops — not the agent loop", 24, 500, MUTED, "start")
 text(100, 3740, "Credentials: Entra apps / tokens in cluster secrets · no Copilot seats", 26, 500, MUTED, "start")
-text(100, 3820, "Lab today: Open WebUI, Prompt Guard, Microsoft 365 MCP, ERP MCP sample, Engineering MCP sample, Control layer, Ollama, Langfuse, Grafana live in si-lab", 24, 500, MUTED, "start")
+text(100, 3820, "Lab today: Open WebUI, Prompt Guard, Microsoft 365 MCP, ERP MCP sample, Engineering MCP (real GitHub, read-only), Control layer, Ollama, Langfuse, Grafana live in si-lab", 24, 500, MUTED, "start")
 
 # -----------------------------------------------------------------------------
 # Edges

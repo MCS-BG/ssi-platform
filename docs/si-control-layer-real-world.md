@@ -2,7 +2,7 @@
 
 This note matches the poster `diagrams/si-control-layer-real-world.png`. It describes how the control layer replaces Microsoft Copilot UIs in a real deployment, while Power BI stays a separate reporting client on the same warehouse.
 
-The lab has Open WebUI, Prompt Guard, a business MCP sample (`fo_*`), RAG, Ollama, Langfuse, Grafana, plus Day 10 `control-layer` and sample `engineering-mcp` in namespace `si-lab`.
+The lab has Open WebUI, Prompt Guard, a business MCP sample (`fo_*`), RAG, Ollama, Langfuse, Grafana, plus the Day 10 `control-layer` and the `engineering-mcp` (real GitHub, read-only, Day 16) in namespace `si-lab`.
 
 Langfuse and Grafana stay in the architecture as the observability lane. Prefer not to spotlight them in write-ups except when changing an observability endpoint.
 
