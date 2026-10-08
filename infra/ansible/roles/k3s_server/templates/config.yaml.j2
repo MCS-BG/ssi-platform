@@ -1,0 +1,19 @@
+# Managed by Ansible (infra/ansible/roles/k3s_server).
+write-kubeconfig-mode: "600"
+secrets-encryption: true
+disable:
+  - traefik
+node-name: "{{ k3s_node_name }}"
+node-ip: "{{ node_ip }}"
+{% if k3s_tls_san | default([]) | length > 0 %}
+tls-san:
+{% for san in k3s_tls_san %}
+  - "{{ san }}"
+{% endfor %}
+{% endif %}
+{% if k3s_node_labels | default([]) | length > 0 %}
+node-label:
+{% for label in k3s_node_labels %}
+  - "{{ label }}"
+{% endfor %}
+{% endif %}

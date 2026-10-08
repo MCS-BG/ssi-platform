@@ -1,0 +1,54 @@
+# Real terminal outputs from day 4 (verbatim, before redaction)
+$ kubectl apply -f ~/ai-ops-homelab/k8s/day-04-rag-worker.yaml
+persistentvolume/rag-docs-pv unchanged
+persistentvolumeclaim/rag-docs unchanged
+configmap/rag-scripts unchanged
+deployment.apps/rag-worker unchanged
+$ kubectl -n si-lab get pods -w
+NAME                          READY   STATUS    RESTARTS   AGE
+ollama-768d64b4c8-wqpq6       1/1     Running   0          14h
+pgvector-0                    1/1     Running   0          69m
+rag-worker-5fd846c57b-hhc98   1/1     Running   0          45m
+$ kubectl -n si-lab exec deploy/rag-worker -- python ingest.py
+day-01-host-hardening.md: 6 chunks stored
+day-02-secure-k3s.md: 12 chunks stored
+day-03-model-serving.md: 14 chunks stored
+$ kubectl -n si-lab exec pgvector-0 -- psql -U rag -d rag -c "select source, count(*) from chunks group by source;"
+          source          | count 
+--------------------------+-------
+ day-01-host-hardening.md |     6
+ day-03-model-serving.md  |    14
+ day-02-secure-k3s.md     |    12
+(3 rows)
+$ kubectl -n si-lab exec deploy/rag-worker -- python ask.py "Why did I use a static PersistentVolume for the Ollama models?"
+You used a static PersistentVolume for the Ollama models because the `hostPath` volume was rejected by the baseline Pod Security level, which enforces a specific security policy. By using a static PersistentVolume, you were able to bind a PersistentVolumeClaim to it, which allowed the pod to access the model files on the external drive while keeping the security policy intact.
+
+Sources:
+  0.235  day-03-model-serving.md  ```yaml apiVersion: v1 kind: PersistentVolume metadata: name: ollama-m...
+  0.255  day-03-model-serving.md  - Ollama running as a Deployment in `si-lab` under the baseline Pod Se...
+  0.275  day-03-model-serving.md  **A small model that fits the GPU.** The card has 4 GB of video memory...
+  0.284  day-02-secure-k3s.md  One real constraint shapes what comes next. This GPU has 4 GB of memor...
+$ kubectl -n si-lab exec deploy/rag-worker -- python ask.py "How do I reach the k3s API from my terminal?"
+To reach the k3s API from your terminal, you need to open an SSH tunnel, as described in the notes. 
+
+In a terminal on the workstation, in its own tab:
+
+```bash
+ssh -N -L 6443:127.0.0.1:6443 labuser@<lab-lan-ip>
+```
+
+This sets up a tunnel that forwards port 6443 on your workstation to port 6443 on the lab host's loopback interface.
+
+Sources:
+  0.289  day-01-host-hardening.md  ## Next: day 2 (`day-02-secure-k3s`) 1. Optional: fix broken apt sourc...
+  0.296  day-02-secure-k3s.md  **Single-node k3s.** k3s is a lightweight, fully conformant Kubernetes...
+  0.305  day-02-secure-k3s.md  ```bash sudo k3s kubectl create namespace si-lab sudo k3s kubectl crea...
+  0.315  day-02-secure-k3s.md  **Cluster data on the internal SSD, models on the external drive.** Th...
+$ kubectl -n si-lab exec deploy/rag-worker -- python ask.py "What GPU is in the lab host and how much VRAM does it have?"
+The lab host has an NVIDIA laptop GPU, and it has 4 GB of video memory.
+
+Sources:
+  0.260  day-03-model-serving.md  `PROCESSOR` is the column that matters, and `100% GPU` is the proof. A...
+  0.261  day-02-secure-k3s.md  One real constraint shapes what comes next. This GPU has 4 GB of memor...
+  0.281  day-02-secure-k3s.md  # Day 2: A secure single-node k3s cluster with a working GPU Yesterday...
+  0.289  day-03-model-serving.md  # Day 3 — Serving a local LLM on the GPU inside k3s Yesterday I finish...

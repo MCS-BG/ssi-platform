@@ -1,0 +1,44 @@
+# Day 7: zero-code OpenTelemetry for rag-worker (strategic-merge patch).
+# The worker installs its packages at start, so the OTel packages are added to that pip line.
+# ask.py / ingest.py are then run through opentelemetry-instrument with kubectl exec; the
+# requests (Ollama embed/generate) and psycopg (pgvector) calls become spans.
+# The nodeSelector pins the worker to the lab host, because its notes volume is a hostPath PV
+# on /mnt/ailab-data (the monitoring node taint already keeps it off the monitoring node; this makes it explicit).
+# Apply:
+#   kubectl -n si-lab patch deployment rag-worker --patch-file ~/ssi-platform/k8s/day-07-rag-worker-otel-patch.yaml
+spec:
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: gpu-node
+      containers:
+        - name: worker
+          command:
+            - sh
+            - -c
+            - >-
+              pip install --no-cache-dir --quiet 'psycopg[binary]' requests
+              opentelemetry-distro==0.65b0 opentelemetry-exporter-otlp-proto-http==1.44.0
+              opentelemetry-instrumentation-requests==0.65b0 opentelemetry-instrumentation-psycopg==0.65b0
+              && sleep infinity
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import psycopg, requests, opentelemetry.distro
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: rag-worker
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=si-lab,deployment.environment.name=homelab
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.monitoring.svc.cluster.local:4318
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: http/protobuf
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_LOGS_EXPORTER
+              value: none

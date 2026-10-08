@@ -1,0 +1,81 @@
+# Day 8b: private HTTPS names on the tailnet for Open WebUI, Grafana and Langfuse.
+# Each Ingress with ingressClassName "tailscale" makes the operator start one small proxy pod in the
+# "tailscale" namespace. The proxy joins the tailnet as a device named after tls.hosts (webui, grafana,
+# langfuse), gets a Let's Encrypt certificate for <name>.<tailnet>.ts.net and forwards to the ClusterIP
+# Service. Nothing is exposed on the LAN or the internet: no NodePort, no Funnel annotation.
+# Needs MagicDNS and HTTPS enabled for the tailnet. Only port 443 and Prefix paths are supported.
+# Docs: https://tailscale.com/docs/kubernetes-operator/ingress
+# Apply (after the operator is running):
+#   kubectl apply -f ~/ssi-platform/k8s/day-08b-tailscale-ingress.yaml
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-webui
+  namespace: si-lab
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: open-webui
+      port:
+        number: 8080
+  tls:
+    - hosts:
+        - webui
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: kps-grafana
+      port:
+        number: 80
+  tls:
+    - hosts:
+        - grafana
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: langfuse
+  namespace: langfuse
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: langfuse-web
+      port:
+        number: 3000
+  tls:
+    - hosts:
+        - langfuse
+---
+# The Day 7 policy langfuse-web-ingress only admits the monitoring and si-lab namespaces on 3000.
+# NetworkPolicies are additive, so this second policy lets the Tailscale proxy pods in too.
+# Open WebUI and Grafana are not selected by any NetworkPolicy, so they need nothing extra.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: langfuse-web-from-tailscale
+  namespace: langfuse
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: langfuse
+      app.kubernetes.io/instance: langfuse
+      app: web
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tailscale
+      ports:
+        - port: 3000
+          protocol: TCP

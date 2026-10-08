@@ -1,0 +1,8 @@
+{{- if .Values.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "ssi.namespace" . }}
+  labels:
+    {{- include "ssi.labels" . | nindent 4 }}
+{{- end }}

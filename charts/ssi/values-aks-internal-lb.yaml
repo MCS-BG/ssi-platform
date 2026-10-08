@@ -1,0 +1,8 @@
+# Overlay: expose ssi-gateway on an AKS Internal Load Balancer for Private Link.
+# helm upgrade --install ssi ./charts/ssi -n si-lab -f charts/ssi/values.yaml -f charts/ssi/values-aks-internal-lb.yaml
+
+service:
+  gateway:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"

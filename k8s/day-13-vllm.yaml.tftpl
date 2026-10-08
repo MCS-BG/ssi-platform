@@ -1,0 +1,122 @@
+# Day 13: optional vLLM model server (OpenAI-compatible API on :8000), rendered
+# by infra/terraform/apps when model_backend = "vllm". Not used in the home lab
+# (4 GB GPU); sized for a cloud GPU pool (see docs/models/beam.md).
+# The Hugging Face token is read from Secret ${hf_token_secret} (key "token");
+# it is never written into this file.
+%{ if weights_host_path != "" ~}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vllm-models-pv
+spec:
+  capacity:
+    storage: ${weights_size}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: vllm-weights-host
+  hostPath:
+    path: ${weights_host_path}
+    type: DirectoryOrCreate
+---
+%{ endif ~}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vllm-models
+  namespace: si-lab
+spec:
+  accessModes: ["ReadWriteOnce"]
+%{ if weights_host_path != "" ~}
+  storageClassName: vllm-weights-host
+  volumeName: vllm-models-pv
+%{ else ~}
+%{ if storage_class != "" ~}
+  storageClassName: ${storage_class}
+%{ endif ~}
+%{ endif ~}
+  resources:
+    requests:
+      storage: ${weights_size}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: si-lab
+  labels: {app: vllm}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: vllm}
+  template:
+    metadata:
+      labels: {app: vllm}
+    spec:
+%{ if runtime_class != "" ~}
+      runtimeClassName: ${runtime_class}
+%{ endif ~}
+      nodeSelector: ${node_selector}
+      tolerations: ${tolerations}
+      containers:
+      - name: vllm
+        image: ${image}
+        args: ${args}
+        ports:
+        - {name: http, containerPort: 8000}
+        env:
+        - {name: HF_HOME, value: /models}
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: ${hf_token_secret}
+              key: token
+              optional: true
+        resources:
+          requests: {cpu: "${cpu_request}", memory: ${memory_request}}
+          limits: {memory: ${memory_limit}, nvidia.com/gpu: ${gpu_count}}
+        volumeMounts:
+        - {name: models, mountPath: /models}
+        - {name: shm, mountPath: /dev/shm}
+        startupProbe:
+          httpGet: {path: /health, port: http}
+          periodSeconds: 30
+          failureThreshold: 120
+        readinessProbe:
+          httpGet: {path: /health, port: http}
+          periodSeconds: 10
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: vllm-models
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: ${shm_size}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: si-lab
+spec:
+  type: ClusterIP
+  selector: {app: vllm}
+  ports:
+  - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-allow-si-lab
+  namespace: si-lab
+spec:
+  podSelector:
+    matchLabels: {app: vllm}
+  policyTypes: ["Ingress"]
+  ingress:
+  - from:
+    - podSelector: {}
+    ports:
+    - {protocol: TCP, port: 8000}

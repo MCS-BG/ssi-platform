@@ -1,0 +1,1093 @@
+# Day 15: conversation memory (recall across questions) for the SSI control layer.
+# Supersedes the Day 10 ConfigMap control-layer-code and Deployment control-layer
+# (the Day 10 Service and NetworkPolicy stay as they are). Adds NetworkPolicy
+# pgvector-allow-control-layer so the control layer may reach Postgres on 5432.
+#
+# Source: apps/control-layer/server.py, mirrored into the ConfigMap below and run on
+# python:3.12-slim. psycopg is installed by an initContainer (the Day 6/10 lab pattern).
+#
+# Storage: table control_layer_turns in the existing Day 4 pgvector database (rag),
+# created by the control layer at startup (CREATE TABLE IF NOT EXISTS). No new database.
+# Credentials: the existing Secret pgvector-auth (key POSTGRES_PASSWORD) via PGPASSWORD,
+# exactly like mcp-server and rag-worker. Nothing new to create for the lab.
+# Managed Postgres instead (Azure Database for PostgreSQL / Amazon RDS for PostgreSQL):
+#   kubectl -n si-lab create secret generic control-layer-memory \
+#     --from-literal=DATABASE_URL='postgresql://<user>:<password>@<host>:5432/<database>?sslmode=require'
+# then replace PG_DSN/PGPASSWORD below with DATABASE_URL from that Secret (see docs/day-15-conversation-memory.md).
+#
+# If Postgres is unreachable the control layer still answers, without memory, and logs it.
+# Apply together with the Day 6 pgvector policy. Once ANY policy selects pgvector, only listed
+# sources may connect, so this file alone would cut mcp-server and rag-worker off from pgvector:
+#   kubectl apply -f ~/ssi-platform/k8s/day-06-netpol-pgvector.yaml -f ~/ssi-platform/k8s/day-15-control-layer-memory.yaml
+# Roll back to Day 14 behaviour:
+#   kubectl apply -f ~/ssi-platform/k8s/day-10-control-layer.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: control-layer-code
+  namespace: si-lab
+  labels:
+    app: control-layer
+data:
+  server.py: |
+    """Day 10 control layer: guarded agent loop across business + engineering MCP.
+
+    POST   /ask                 {"question":"...", "conversation_id":"optional"}  loop with budgets
+    POST   /demo                runs the Andreas two-hop sample (engineering PR + business customer)
+    GET    /conversations/<id>  Day 15: stored turns of one conversation (oldest first)
+    DELETE /conversations/<id>  Day 15: forget one conversation
+    GET    /memory              Day 15: non-secret memory status
+    GET    /healthz
+
+    Calls Prompt Guard (fail closed), mcp-server, engineering-mcp, Ollama.
+    Day 14 adds the productivity slot: m365-mcp (Microsoft 365 via Graph, read-only,
+    signed in as one personal Microsoft account). M365_MCP_URL points at it.
+
+    Day 15 adds conversation memory: each /ask turn (question, tool hops with trimmed
+    results, answer) is stored in Postgres (table control_layer_turns in the existing
+    pgvector database) under a conversation_id. The next question with the same id
+    loads the last MEMORY_TURNS turns and gives them to the planner and to the answer
+    step, so follow-ups work across every MCP slot. MCPs still never talk to each
+    other; only the control layer reads and writes memory. psycopg is the only
+    non-stdlib package and is optional: without it, or without a reachable
+    Postgres, /ask works exactly as before (no memory) and the reason is logged.
+    """
+    from __future__ import annotations
+
+    import json
+    import os
+    import re
+    import threading
+    import time
+    import urllib.error
+    import urllib.request
+    import uuid
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from typing import Any
+    from urllib.parse import unquote, urlsplit
+
+    try:  # Day 15 conversation memory; optional so the stdlib-only Day 10 deploy keeps working.
+        import psycopg
+        from psycopg.types.json import Jsonb
+    except ImportError:  # pragma: no cover - depends on the pod
+        psycopg = None  # type: ignore[assignment]
+        Jsonb = None  # type: ignore[assignment,misc]
+
+    PORT = int(os.environ.get("PORT", "8080"))
+    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama.si-lab.svc.cluster.local:11434").rstrip("/")
+    MODEL = os.environ.get("MODEL", "llama3.2:3b")
+    PROMPT_GUARD_URL = os.environ.get(
+        "PROMPT_GUARD_URL", "http://prompt-guard.si-lab.svc.cluster.local:8080/classify"
+    )
+    BUSINESS_MCP_URL = os.environ.get(
+        "BUSINESS_MCP_URL", "http://mcp-server:8000/mcp"
+    )
+    ENGINEERING_MCP_URL = os.environ.get(
+        "ENGINEERING_MCP_URL", "http://engineering-mcp:8000/mcp"
+    )
+    # Day 14 productivity slot (Microsoft 365 / Graph). The Host header must be in
+    # m365-mcp's MCP_ALLOWED_HOSTS; the short Service name is on its default list.
+    M365_MCP_URL = os.environ.get(
+        "M365_MCP_URL", "http://m365-mcp.si-lab.svc.cluster.local:8000/mcp"
+    )
+    M365_MCP_HOST = os.environ.get("M365_MCP_HOST", "m365-mcp:8000")
+    MAX_TOOL_CALLS = int(os.environ.get("MAX_TOOL_CALLS", "4"))
+    MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "512"))
+    HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "60"))
+
+
+    def _env_bool(name: str, default: bool) -> bool:
+        value = os.environ.get(name)
+        if value is None or not value.strip():
+            return default
+        return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+    # Day 15 conversation memory. DATABASE_URL wins; otherwise PG_DSN (libpq key=value,
+    # password from PGPASSWORD, the same pattern as mcp-server and rag-worker).
+    MEMORY_ENABLED = _env_bool("MEMORY_ENABLED", True)
+    MEMORY_DSN = (os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN") or "").strip()
+    MEMORY_TURNS = max(0, min(int(os.environ.get("MEMORY_TURNS", "6")), 20))
+    MEMORY_MAX_CHARS = max(500, int(os.environ.get("MEMORY_MAX_CHARS", "2500")))
+    MEMORY_RESULT_CHARS = max(200, int(os.environ.get("MEMORY_RESULT_CHARS", "2000")))
+    MEMORY_CONNECT_TIMEOUT = max(1, int(os.environ.get("MEMORY_CONNECT_TIMEOUT", "3")))
+    MEMORY_RETRY_SECONDS = float(os.environ.get("MEMORY_RETRY_SECONDS", "30"))
+    MEMORY_TABLE = "control_layer_turns"
+    CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+    # Short catalog so llama3.2:3b stays within the 4 GB card budget.
+    TOOL_CATALOG = """Tools (slot.name):
+    - engineering.list_prs args: repo?, state?
+    - engineering.list_issues args: repo?, state?
+    - engineering.get_issue args: repo, number
+    - engineering.list_repos args: none
+    - business.fo_query args: entity, filter?, select?, top?
+    - business.fo_list_entities args: none
+    - business.search_notes args: query, k?
+    - productivity.m365_whoami args: none
+    - productivity.m365_list_mail args: top?, folder?, unread_only?
+    - productivity.m365_get_mail args: message_id
+    - productivity.m365_list_events args: days?, top?
+    - productivity.m365_list_onedrive args: path?
+    - productivity.m365_search_onedrive args: query
+    Reply with ONE line only:
+    TOOL slot.name {"arg":"value"}
+    or
+    FINAL your short answer
+    """
+
+
+    def http_json(
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+        accept: str | None = None,
+        host: str | None = None,
+    ) -> Any:
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": accept or "application/json"}
+        if host:
+            headers["Host"] = host
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                body = resp.read()
+                if not body:
+                    return None
+                ctype = resp.headers.get("Content-Type", "")
+                if "json" in ctype or body[:1] in (b"{", b"["):
+                    return json.loads(body.decode("utf-8"))
+                return body.decode("utf-8")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"HTTP {e.code} from {url}: {detail}") from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"unreachable {url}: {e.reason}") from e
+
+
+    def classify(text: str) -> dict[str, Any]:
+        """Fail closed: any Guard error stops the loop."""
+        try:
+            result = http_json("POST", PROMPT_GUARD_URL, {"text": text})
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"Prompt Guard unavailable, request refused: {e}") from e
+        if not isinstance(result, dict) or "label" not in result:
+            raise RuntimeError("Prompt Guard unavailable, request refused: bad response")
+        if result.get("label") == "malicious":
+            raise RuntimeError(
+                f"Refused by Prompt Guard: malicious_score={result.get('malicious_score')}"
+            )
+        return result
+
+
+    def mcp_call(url: str, name: str, arguments: dict[str, Any] | None = None, host: str | None = None) -> dict[str, Any]:
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        }
+        raw = http_json(
+            "POST",
+            url,
+            body,
+            accept="application/json, text/event-stream",
+            host=host,
+        )
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"MCP bad response from {url}")
+        if "error" in raw:
+            raise RuntimeError(f"MCP error: {raw['error']}")
+        result = raw.get("result") or {}
+        if result.get("isError"):
+            text = " ".join(
+                c.get("text", "") for c in result.get("content", []) if isinstance(c, dict)
+            )
+            raise RuntimeError(f"tool error: {text}")
+        if "structuredContent" in result and result["structuredContent"] is not None:
+            return result["structuredContent"]
+        content = result.get("content") or []
+        if content and isinstance(content[0], dict) and "text" in content[0]:
+            try:
+                return json.loads(content[0]["text"])
+            except json.JSONDecodeError:
+                return {"text": content[0]["text"]}
+        return result
+
+
+    def call_tool(slot: str, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        classify(json.dumps({"slot": slot, "tool": name, "arguments": arguments or {}}, sort_keys=True))
+        if slot == "engineering":
+            # Short Host matches TransportSecuritySettings on MCP servers (and works for the sample).
+            return mcp_call(ENGINEERING_MCP_URL, name, arguments, host="engineering-mcp:8000")
+        if slot == "business":
+            return mcp_call(BUSINESS_MCP_URL, name, arguments, host="mcp-server:8000")
+        if slot == "productivity":
+            return mcp_call(M365_MCP_URL, name, arguments, host=M365_MCP_HOST)
+        raise RuntimeError(f"unknown slot: {slot}")
+
+
+    def run_step(step: dict[str, Any]) -> dict[str, Any]:
+        """call_tool, except a productivity tool error (for example "not signed in to
+        Microsoft 365") becomes an error result the answer can explain. Prompt Guard
+        refusals and every other slot still stop the loop (fail closed)."""
+        try:
+            return call_tool(step["slot"], step["name"], step.get("arguments") or {})
+        except RuntimeError as e:
+            if step["slot"] == "productivity" and str(e).startswith("tool error:"):
+                return {"error": str(e)}
+            raise
+
+
+    def ollama_generate(prompt: str, num_predict: int | None = None) -> dict[str, Any]:
+        limit = MAX_TOKENS if num_predict is None else min(num_predict, MAX_TOKENS)
+        payload = {
+            "model": MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.2, "num_predict": limit},
+        }
+        result = http_json("POST", f"{OLLAMA_URL}/api/generate", payload)
+        if not isinstance(result, dict):
+            raise RuntimeError("Ollama bad response")
+        return result
+
+
+    def parse_model_line(text: str) -> tuple[str, Any]:
+        line = (text or "").strip().splitlines()[0].strip() if text else ""
+        if line.upper().startswith("FINAL"):
+            return "final", line[5:].strip(" :")
+        m = re.match(r"TOOL\s+(engineering|business|productivity)\.([A-Za-z0-9_]+)\s+(\{.*\})\s*$", line, re.I)
+        if m:
+            try:
+                args = json.loads(m.group(3))
+            except json.JSONDecodeError:
+                args = {}
+            return "tool", {"slot": m.group(1).lower(), "name": m.group(2), "arguments": args}
+        m2 = re.match(r"TOOL\s+(engineering|business|productivity)\.([A-Za-z0-9_]+)\s*$", line, re.I)
+        if m2:
+            return "tool", {"slot": m2.group(1).lower(), "name": m2.group(2), "arguments": {}}
+        return "final", line or text.strip()
+
+
+    # ---------------------------------------------------------------------------
+    # Day 15: conversation memory (recall across questions), stored in Postgres.
+    # ---------------------------------------------------------------------------
+    class MemoryUnavailable(RuntimeError):
+        """Postgres is not configured, not reachable, or failed a query."""
+
+
+    def _log(msg: str) -> None:
+        print(f"memory: {msg}", flush=True)
+
+
+    def _dsn_label(dsn: str) -> str:
+        """host/db/user only; never the password."""
+        try:
+            from psycopg.conninfo import conninfo_to_dict
+
+            info = conninfo_to_dict(dsn)
+            return f"host={info.get('host', '?')} dbname={info.get('dbname', '?')} user={info.get('user', '?')}"
+        except Exception:  # noqa: BLE001
+            return "dsn=(unparsed)"
+
+
+    class ConversationMemory:
+        """Short-lived connections per call (low volume, one replica). If Postgres
+        fails, calls raise MemoryUnavailable and the store backs off for
+        MEMORY_RETRY_SECONDS so a down database does not slow every question."""
+
+        def __init__(self, dsn: str, enabled: bool) -> None:
+            self.dsn = dsn
+            self.reason = ""
+            if not enabled:
+                self.reason = "MEMORY_ENABLED=false"
+            elif psycopg is None:
+                self.reason = "psycopg is not installed"
+            elif not dsn:
+                self.reason = "DATABASE_URL / PG_DSN not set"
+            self.enabled = not self.reason
+            self._lock = threading.Lock()
+            self._schema_ready = False
+            self._down_until = 0.0
+            self.last_error = ""
+
+        def status(self) -> dict[str, Any]:
+            left = max(0.0, self._down_until - time.monotonic())
+            return {
+                "enabled": self.enabled,
+                "reason": self.reason or None,
+                "table": MEMORY_TABLE,
+                "turns": MEMORY_TURNS,
+                "max_chars": MEMORY_MAX_CHARS,
+                "schema_ready": self._schema_ready,
+                "reachable": self.enabled and left == 0.0 and not self.last_error,
+                "retry_in_seconds": round(left, 1),
+                "last_error": self.last_error or None,
+            }
+
+        def _mark_down(self, err: Exception) -> None:
+            self.last_error = f"{type(err).__name__}: {' '.join(str(err).split())[:200]}"
+            self._down_until = time.monotonic() + MEMORY_RETRY_SECONDS
+            _log(f"postgres unavailable, answering without memory for {MEMORY_RETRY_SECONDS:.0f}s ({self.last_error})")
+
+        def _connect(self) -> Any:
+            if not self.enabled:
+                raise MemoryUnavailable(f"conversation memory is disabled ({self.reason})")
+            if time.monotonic() < self._down_until:
+                raise MemoryUnavailable(f"conversation memory unavailable ({self.last_error})")
+            try:
+                conn = psycopg.connect(
+                    self.dsn,
+                    connect_timeout=MEMORY_CONNECT_TIMEOUT,
+                    autocommit=True,
+                    options="-c statement_timeout=5000",
+                )
+            except psycopg.Error as e:
+                self._mark_down(e)
+                raise MemoryUnavailable(f"conversation memory unavailable ({self.last_error})") from e
+            try:
+                if not self._schema_ready:
+                    self._ensure_schema(conn)
+            except psycopg.Error as e:
+                conn.close()
+                self._mark_down(e)
+                raise MemoryUnavailable(f"conversation memory unavailable ({self.last_error})") from e
+            if self.last_error:
+                _log("postgres reachable again, memory back on")
+                self.last_error = ""
+            return conn
+
+        def _ensure_schema(self, conn: Any) -> None:
+            with self._lock:
+                if self._schema_ready:
+                    return
+                conn.execute(
+                    f"""CREATE TABLE IF NOT EXISTS {MEMORY_TABLE} (
+                        id              bigserial PRIMARY KEY,
+                        conversation_id text        NOT NULL,
+                        created_at      timestamptz NOT NULL DEFAULT now(),
+                        question        text        NOT NULL,
+                        tool_calls      jsonb       NOT NULL DEFAULT '[]'::jsonb,
+                        answer          text        NOT NULL DEFAULT '',
+                        mode            text,
+                        ok              boolean     NOT NULL DEFAULT true
+                    )"""
+                )
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {MEMORY_TABLE}_conv_idx "
+                    f"ON {MEMORY_TABLE} (conversation_id, id DESC)"
+                )
+                self._schema_ready = True
+                _log(f"table {MEMORY_TABLE} ready")
+
+        def _run(self, fn: Any) -> Any:
+            conn = self._connect()
+            try:
+                return fn(conn)
+            except psycopg.Error as e:
+                self._mark_down(e)
+                raise MemoryUnavailable(f"conversation memory unavailable ({self.last_error})") from e
+            finally:
+                conn.close()
+
+        def startup(self) -> None:
+            if not self.enabled:
+                _log(f"off ({self.reason}); /ask works without recall")
+                return
+            _log(f"on, postgres {_dsn_label(self.dsn)}, last {MEMORY_TURNS} turns, {MEMORY_MAX_CHARS} chars")
+            try:
+                self._run(lambda conn: None)
+            except MemoryUnavailable:
+                pass  # already logged; retried on the next question
+
+        def load(self, conversation_id: str, limit: int) -> list[dict[str, Any]]:
+            if limit <= 0:
+                return []
+
+            def q(conn: Any) -> list[dict[str, Any]]:
+                rows = conn.execute(
+                    f"SELECT id, created_at, question, tool_calls, answer, mode, ok FROM {MEMORY_TABLE} "
+                    "WHERE conversation_id = %s ORDER BY id DESC LIMIT %s",
+                    (conversation_id, limit),
+                ).fetchall()
+                return [_row_to_turn(r) for r in reversed(rows)]
+
+            return self._run(q)
+
+        def save(self, conversation_id: str, turn: dict[str, Any]) -> None:
+            def q(conn: Any) -> None:
+                conn.execute(
+                    f"INSERT INTO {MEMORY_TABLE} (conversation_id, question, tool_calls, answer, mode, ok) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        conversation_id,
+                        turn["question"],
+                        Jsonb(turn["tool_calls"]),
+                        turn.get("answer") or "",
+                        turn.get("mode"),
+                        bool(turn.get("ok", True)),
+                    ),
+                )
+
+            self._run(q)
+
+        def forget(self, conversation_id: str) -> int:
+            def q(conn: Any) -> int:
+                cur = conn.execute(f"DELETE FROM {MEMORY_TABLE} WHERE conversation_id = %s", (conversation_id,))
+                return int(cur.rowcount or 0)
+
+            return self._run(q)
+
+
+    def _row_to_turn(row: Any) -> dict[str, Any]:
+        tid, created_at, question, tool_calls, answer, mode, ok = row
+        return {
+            "id": tid,
+            "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+            "question": question,
+            "tool_calls": tool_calls or [],
+            "answer": answer,
+            "mode": mode,
+            "ok": ok,
+        }
+
+
+    MEMORY = ConversationMemory(MEMORY_DSN, MEMORY_ENABLED)
+
+
+    def valid_conversation_id(value: Any) -> str:
+        cid = str(value or "")
+        if not CONVERSATION_ID_RE.fullmatch(cid):
+            raise RuntimeError(
+                "invalid conversation_id: use 1-128 characters from letters, digits, '_', '.', ':' and '-'"
+            )
+        return cid
+
+
+    def trim_result(result: Any) -> Any:
+        """Keep stored tool results small; big results become a text preview."""
+        text = json.dumps(result, default=str)
+        if len(text) <= MEMORY_RESULT_CHARS:
+            return result
+        return {"truncated": True, "preview": text[:MEMORY_RESULT_CHARS]}
+
+
+    def memory_context(turns: list[dict[str, Any]], max_chars: int = MEMORY_MAX_CHARS) -> tuple[str, int]:
+        """Earlier turns as plain text, newest kept first when the size cap is hit.
+        Returns (text oldest-first, number of turns included)."""
+        blocks: list[str] = []
+        used = 0
+        for turn in reversed(turns):
+            lines = [f"Q: {str(turn.get('question') or '')[:400]}"]
+            for hop in turn.get("tool_calls") or []:
+                res = json.dumps(hop.get("result"), default=str)[:300]
+                args = json.dumps(hop.get("arguments") or {}, sort_keys=True)
+                lines.append(f"Tool {hop.get('slot')}.{hop.get('name')} {args} -> {res}")
+            lines.append(f"A: {str(turn.get('answer') or '')[:600]}")
+            block = "\n".join(lines)
+            if used + len(block) + 1 > max_chars:
+                if not blocks:
+                    blocks.append(block[:max_chars])
+                break
+            blocks.append(block)
+            used += len(block) + 1
+        return "\n".join(reversed(blocks)), len(blocks)
+
+
+    M365_WORDS = {
+        "m365_list_events": r"\b(calendar|meetings?|events?|schedule|appointments?)\b",
+        "m365_list_mail": r"\b(e-?mails?|mail|inbox|outlook|messages)\b",
+        "m365_list_onedrive": r"\b(onedrive|my files|my documents)\b",
+        "m365_whoami": r"\b(m365|microsoft 365|who am i|signed in)\b",
+    }
+    M365_ARGS = {
+        "m365_list_events": {"days": 7, "top": 20},
+        "m365_list_mail": {"top": 10},
+        "m365_list_onedrive": {},
+        "m365_whoami": {},
+    }
+
+
+    def productivity_plan(question: str) -> list[dict[str, Any]]:
+        """Productivity (Microsoft 365) steps for questions about mail, calendar or OneDrive."""
+        q = question.lower()
+        return [
+            {"slot": "productivity", "name": name, "arguments": tune_args(question, name, dict(M365_ARGS[name]))}
+            for name, pattern in M365_WORDS.items()
+            if re.search(pattern, q)
+        ]
+
+
+    def tune_args(question: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Day 15: read time windows and counts from the question ("next week",
+        "tomorrow", "unread", "5 emails") so a follow-up can change the window of
+        the tool it inherits from memory."""
+        q = question.lower()
+        if name == "m365_list_events":
+            m = re.search(r"\b(\d{1,2})\s+days?\b", q)
+            if m:
+                args["days"] = max(1, min(int(m.group(1)), 31))
+            elif re.search(r"\bnext\s+month\b|\bthis\s+month\b|\b30\s+days\b", q):
+                args["days"] = 31
+            elif re.search(r"\bnext\s+week\b|\bweek\s+after\b", q):
+                args["days"] = 14
+            elif re.search(r"\btomorrow\b", q):
+                args["days"] = 2
+            elif re.search(r"\btoday\b|\btonight\b", q):
+                args["days"] = 1
+            elif re.search(r"\bthis\s+week\b", q):
+                args["days"] = 7
+        elif name == "m365_list_mail":
+            if re.search(r"\bunread\b", q):
+                args["unread_only"] = True
+            m = re.search(r"\b(\d{1,2})\s+(?:e-?mails?|mails?|messages)\b", q)
+            if m:
+                args["top"] = max(1, min(int(m.group(1)), 25))
+            elif re.search(r"\bmore\b|\bolder\b", q):
+                args["top"] = min(25, int(args.get("top") or 10) * 2)
+        return args
+
+
+    def explicit_plan(question: str) -> list[dict[str, Any]]:
+        """Steps the question asks for by itself (keywords), without any fallback."""
+        q = question.lower()
+        steps: list[dict[str, Any]] = productivity_plan(question)
+        wants_eng = any(k in q for k in ("pr", "pull request", "issue", "repo", "invoice-service", "engineering"))
+        wants_biz = any(k in q for k in ("customer", "account", "invoice", "fo_", "business", "sales order", "d365"))
+        if wants_eng and ("pr" in q or "pull" in q):
+            steps.append({"slot": "engineering", "name": "list_prs", "arguments": {"repo": "invoice-service", "state": "open"}})
+        elif wants_eng and "issue" in q:
+            steps.append({"slot": "engineering", "name": "list_issues", "arguments": {"repo": "invoice-service", "state": "open"}})
+        elif wants_eng:
+            steps.append({"slot": "engineering", "name": "list_prs", "arguments": {"repo": "invoice-service", "state": "open"}})
+        if wants_biz:
+            steps.append(
+                {
+                    "slot": "business",
+                    "name": "fo_query",
+                    "arguments": {
+                        "entity": "CustomersV3",
+                        "filter": "CustomerAccount eq 'DEMO-C0001'",
+                        "select": "CustomerAccount,OrganizationName,AddressCity,CustomerGroupId",
+                        "top": 1,
+                    },
+                }
+            )
+        return steps
+
+
+    def follow_up_plan(question: str, turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Day 15: a question with no tool keywords of its own ("and what about next
+        week?") repeats the tools of the latest remembered turn that used any, with
+        arguments re-read from the new question. Results are never reused; tools run again."""
+        for turn in reversed(turns):
+            hops = [h for h in (turn.get("tool_calls") or []) if h.get("slot") in ("engineering", "business", "productivity")]
+            if not hops:
+                continue
+            steps: list[dict[str, Any]] = []
+            for hop in hops:
+                args = dict(hop.get("arguments") or {})
+                if hop.get("name") == "search_notes":
+                    args["query"] = f"{turn.get('question', '')} {question}".strip()[:200]
+                steps.append({"slot": hop["slot"], "name": hop["name"], "arguments": tune_args(question, hop["name"], args)})
+            return steps
+        return []
+
+
+    def plan_with_source(question: str, turns: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], str]:
+        """(steps, source): source is "question", "memory" (follow-up) or "fallback"."""
+        steps = explicit_plan(question)
+        source = "question"
+        if not steps and turns:
+            steps = follow_up_plan(question, turns)
+            source = "memory"
+        if not steps:
+            steps = [{"slot": "business", "name": "search_notes", "arguments": {"query": question[:200], "k": 3}}]
+            source = "fallback"
+        return steps[:MAX_TOOL_CALLS], source
+
+
+    def planner(question: str, turns: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        """Deterministic two-hop plan for the Andreas sample and close variants,
+        plus productivity steps when the question is about mail, calendar or OneDrive.
+        Day 15: with remembered turns, a keyword-free follow-up inherits the last tools."""
+        return plan_with_source(question, turns)[0]
+
+
+    def synthesize(question: str, tool_hops: list[dict[str, Any]], memory_text: str = "") -> tuple[str, dict[str, Any]]:
+        evidence = json.dumps(tool_hops, indent=2)[:3500]
+        if memory_text:
+            prompt = (
+                "Answer the question using ONLY the tool results and the earlier conversation. "
+                "Use the earlier conversation to resolve words like 'that', 'them' or 'next'. "
+                "Be concise (3-6 sentences).\n"
+                f"Earlier in this conversation (oldest first):\n{memory_text}\n\n"
+                f"Question: {question}\n"
+                f"Tool results:\n{evidence}\n"
+                "Answer:"
+            )
+        else:
+            prompt = (
+                "Answer the question using ONLY the tool results. Be concise (3-6 sentences).\n"
+                f"Question: {question}\n"
+                f"Tool results:\n{evidence}\n"
+                "Answer:"
+            )
+        gen = ollama_generate(prompt, num_predict=min(256, MAX_TOKENS))
+        answer = (gen.get("response") or "").strip()
+        usage = {
+            "prompt_eval_count": gen.get("prompt_eval_count"),
+            "eval_count": gen.get("eval_count"),
+        }
+        return answer, usage
+
+
+    def run_demo(question: str | None = None) -> dict[str, Any]:
+        q = question or (
+            "What open PRs touch the invoice service, and what customer account "
+            "owns that invoice line in the business tools?"
+        )
+        guard = classify(q)
+        hops: list[dict[str, Any]] = []
+        plan = [
+            {"slot": "engineering", "name": "list_prs", "arguments": {"repo": "invoice-service", "state": "open"}},
+            {
+                "slot": "business",
+                "name": "fo_query",
+                "arguments": {
+                    "entity": "CustomersV3",
+                    "filter": "CustomerAccount eq 'DEMO-C0001'",
+                    "select": "CustomerAccount,OrganizationName,AddressCity,CustomerGroupId",
+                    "top": 1,
+                },
+            },
+        ]
+        for step in plan:
+            if len(hops) >= MAX_TOOL_CALLS:
+                break
+            result = call_tool(step["slot"], step["name"], step["arguments"])
+            hops.append({**step, "result": result})
+        answer, usage = synthesize(q, hops)
+        return {
+            "ok": True,
+            "mode": "demo",
+            "question": q,
+            "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+            "tool_calls": hops,
+            "slots_used": sorted({h["slot"] for h in hops}),
+            "answer": answer,
+            "model": MODEL,
+            "usage": usage,
+            "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},
+        }
+
+
+    def run_ask(question: str, conversation_id: Any = None) -> dict[str, Any]:
+        """Day 15 wrapper: Prompt Guard first, then load memory for conversation_id
+        (generated when missing), run the Day 10/14 loop, store the turn. A memory
+        failure never fails the question; it is logged and reported in "memory"."""
+        if not question or not question.strip():
+            raise RuntimeError("question must not be empty")
+        cid = valid_conversation_id(conversation_id) if conversation_id not in (None, "") else uuid.uuid4().hex
+        guard = classify(question.strip())
+
+        mem: dict[str, Any] = {"enabled": MEMORY.enabled, "turns_loaded": 0, "stored": False}
+        turns: list[dict[str, Any]] = []
+        if MEMORY.enabled and MEMORY_TURNS > 0:
+            try:
+                turns = MEMORY.load(cid, MEMORY_TURNS)
+            except MemoryUnavailable as e:
+                mem["error"] = str(e)
+        memory_text, used = memory_context(turns) if turns else ("", 0)
+        mem["turns_loaded"] = used
+
+        out = _run_ask_loop(question, guard, turns, memory_text)
+
+        if MEMORY.enabled:
+            turn = {
+                "question": question.strip(),
+                "tool_calls": [{**{k: v for k, v in h.items() if k != "result"}, "result": trim_result(h.get("result"))} for h in out.get("tool_calls") or []],
+                "answer": out.get("answer") or "",
+                "mode": out.get("mode") or out.get("stopped"),
+                "ok": bool(out.get("ok")),
+            }
+            try:
+                MEMORY.save(cid, turn)
+                mem["stored"] = True
+            except MemoryUnavailable as e:
+                mem.setdefault("error", str(e))
+        elif MEMORY.reason:
+            mem["reason"] = MEMORY.reason
+        out["conversation_id"] = cid
+        out["memory"] = mem
+        return out
+
+
+    def _run_ask_loop(
+        question: str, guard: dict[str, Any], turns: list[dict[str, Any]], memory_text: str
+    ) -> dict[str, Any]:
+        hops: list[dict[str, Any]] = []
+        tokens_used = 0
+
+        # Prefer a deterministic plan when the question clearly needs both slots.
+        plan, plan_source = plan_with_source(question, turns)
+        needs_both = any(s["slot"] == "engineering" for s in plan) and any(s["slot"] == "business" for s in plan)
+        needs_productivity = any(s["slot"] == "productivity" for s in plan)
+        if needs_both or needs_productivity:
+            for step in plan:
+                if len(hops) >= MAX_TOOL_CALLS:
+                    return {
+                        "ok": False,
+                        "stopped": "max_tool_calls",
+                        "question": question,
+                        "tool_calls": hops,
+                        "answer": f"Stopped: max_tool_calls={MAX_TOOL_CALLS}",
+                        "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},
+                    }
+                result = run_step(step)
+                hops.append({**step, "result": result})
+            answer, usage = synthesize(question, hops, memory_text)
+            tokens_used += int(usage.get("eval_count") or 0) + int(usage.get("prompt_eval_count") or 0)
+            return {
+                "ok": True,
+                "mode": "ask-planned",
+                "plan_source": plan_source,
+                "question": question,
+                "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+                "tool_calls": hops,
+                "slots_used": sorted({h["slot"] for h in hops}),
+                "answer": answer,
+                "model": MODEL,
+                "usage": usage,
+                "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+            }
+
+        # Model-driven loop for other questions (short prompts). Day 15: the tail of
+        # the remembered conversation goes in front so the model can resolve follow-ups.
+        earlier = f"Earlier in this conversation:\n{memory_text[-1200:]}\n\n" if memory_text else ""
+        history = f"Question: {question.strip()}\n"
+        for _ in range(MAX_TOOL_CALLS + 1):
+            if tokens_used >= MAX_TOKENS:
+                return {
+                    "ok": False,
+                    "stopped": "max_tokens",
+                    "question": question,
+                    "tool_calls": hops,
+                    "answer": f"Stopped: max_tokens={MAX_TOKENS}",
+                    "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+                }
+            prompt = TOOL_CATALOG + "\n" + earlier + history[-2500:] + "\nNext:"
+            gen = ollama_generate(prompt, num_predict=120)
+            tokens_used += int(gen.get("eval_count") or 0) + int(gen.get("prompt_eval_count") or 0)
+            kind, payload = parse_model_line(gen.get("response") or "")
+            if kind == "final":
+                return {
+                    "ok": True,
+                    "mode": "ask-model",
+                    "question": question,
+                    "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+                    "tool_calls": hops,
+                    "slots_used": sorted({h["slot"] for h in hops}),
+                    "answer": payload,
+                    "model": MODEL,
+                    "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+                }
+            if len(hops) >= MAX_TOOL_CALLS:
+                return {
+                    "ok": False,
+                    "stopped": "max_tool_calls",
+                    "question": question,
+                    "tool_calls": hops,
+                    "answer": f"Stopped: max_tool_calls={MAX_TOOL_CALLS}",
+                    "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+                }
+            step = payload
+            result = run_step(step)
+            hops.append({**step, "result": result})
+            history += f"TOOL {step['slot']}.{step['name']} -> {json.dumps(result)[:800]}\n"
+
+        answer, usage = synthesize(question, hops, memory_text)
+        return {
+            "ok": True,
+            "mode": "ask-model",
+            "question": question,
+            "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+            "tool_calls": hops,
+            "slots_used": sorted({h["slot"] for h in hops}),
+            "answer": answer,
+            "model": MODEL,
+            "usage": usage,
+            "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},
+        }
+
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            print("%s - %s" % (self.address_string(), fmt % args), flush=True)
+
+        def _send(self, code: int, body: bytes, content_type: str = "application/json") -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _read_json(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"invalid json: {e}") from e
+            if not isinstance(data, dict):
+                raise RuntimeError("body must be a JSON object")
+            return data
+
+        def _json(self, code: int, obj: Any) -> None:
+            self._send(code, json.dumps(obj, default=str).encode("utf-8"))
+
+        def _conversation(self, path: str, method: str) -> None:
+            """Day 15: GET reads one conversation's stored turns, DELETE forgets it."""
+            try:
+                cid = valid_conversation_id(unquote(path[len("/conversations/"):]))
+            except RuntimeError as e:
+                self._json(400, {"ok": False, "error": str(e)})
+                return
+            try:
+                if method == "DELETE":
+                    deleted = MEMORY.forget(cid)
+                    self._json(200, {"ok": True, "conversation_id": cid, "deleted_turns": deleted})
+                    return
+                turns = MEMORY.load(cid, 200)
+            except MemoryUnavailable as e:
+                self._json(503, {"ok": False, "error": str(e)})
+                return
+            if not turns:
+                self._json(404, {"ok": False, "conversation_id": cid, "error": "no stored turns for this conversation_id"})
+                return
+            self._json(200, {"ok": True, "conversation_id": cid, "turns": turns})
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = urlsplit(self.path).path
+            if path == "/healthz":
+                self._send(200, b"ok\n", "text/plain; charset=utf-8")
+                return
+            if path == "/memory":
+                self._json(200, MEMORY.status())
+                return
+            if path.startswith("/conversations/"):
+                self._conversation(path, "GET")
+                return
+            self._send(404, b'{"error":"not found"}\n')
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            path = urlsplit(self.path).path
+            if path.startswith("/conversations/"):
+                self._conversation(path, "DELETE")
+                return
+            self._send(404, b'{"error":"not found"}\n')
+
+        def do_POST(self) -> None:  # noqa: N802
+            path = urlsplit(self.path).path
+            try:
+                if path == "/demo":
+                    body = self._read_json()
+                    out = run_demo(body.get("question"))
+                elif path == "/ask":
+                    body = self._read_json()
+                    out = run_ask(str(body.get("question") or ""), body.get("conversation_id"))
+                else:
+                    self._send(404, b'{"error":"not found"}\n')
+                    return
+                payload = json.dumps(out).encode("utf-8")
+                self._send(200, payload)
+            except Exception as e:  # noqa: BLE001
+                err = {"ok": False, "error": str(e)}
+                self._send(503 if "Guard" in str(e) or "unavailable" in str(e) else 400, json.dumps(err).encode("utf-8"))
+
+
+    def main() -> None:
+        server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+        print(
+            f"control-layer on 0.0.0.0:{PORT} model={MODEL} "
+            f"max_tool_calls={MAX_TOOL_CALLS} max_tokens={MAX_TOKENS}",
+            flush=True,
+        )
+        MEMORY.startup()  # never blocks or fails startup; Postgres down = no recall
+        server.serve_forever()
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-layer
+  namespace: si-lab
+  labels:
+    app: control-layer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: control-layer
+  template:
+    metadata:
+      labels:
+        app: control-layer
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: gpu-node
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Same pin as apps/control-layer/requirements.txt and apps/mcp-server.
+        - name: deps
+          image: python:3.12-slim
+          command: ["python", "-m", "pip", "install", "--no-cache-dir", "--disable-pip-version-check", "--only-binary=:all:", "--quiet", "--target", "/deps", "psycopg[binary]==3.3.6"]
+          env:
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: deps
+              mountPath: /deps
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: control-layer
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/app/server.py"]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: OLLAMA_URL
+              value: http://ollama.si-lab.svc.cluster.local:11434
+            - name: MODEL
+              value: llama3.2:3b
+            - name: PROMPT_GUARD_URL
+              value: http://prompt-guard.si-lab.svc.cluster.local:8080/classify
+            - name: BUSINESS_MCP_URL
+              value: http://mcp-server:8000/mcp
+            - name: ENGINEERING_MCP_URL
+              value: http://engineering-mcp:8000/mcp
+            # Day 14 productivity slot (k8s/day-14-m365-mcp.yaml)
+            - name: M365_MCP_URL
+              value: http://m365-mcp.si-lab.svc.cluster.local:8000/mcp
+            - name: M365_MCP_HOST
+              value: m365-mcp:8000
+            - name: MAX_TOOL_CALLS
+              value: "4"
+            - name: MAX_TOKENS
+              value: "512"
+            # Day 15 conversation memory (table control_layer_turns in the pgvector database)
+            - name: MEMORY_ENABLED
+              value: "true"
+            - name: MEMORY_TURNS
+              value: "6"
+            - name: MEMORY_MAX_CHARS
+              value: "2500"
+            - name: PG_DSN
+              value: host=pgvector.si-lab.svc.cluster.local port=5432 dbname=rag user=rag
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pgvector-auth
+                  key: POSTGRES_PASSWORD
+                  optional: true  # missing Secret = no memory, not a broken pod
+            - name: PYTHONPATH
+              value: /deps
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+            - name: deps
+              mountPath: /deps
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: code
+          configMap:
+            name: control-layer-code
+        - name: deps
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+---
+# The control layer may open Postgres connections to pgvector. NetworkPolicies add up: keep the
+# Day 6 pgvector-allow-clients policy (mcp-server, rag-worker) applied next to this one, or those
+# two lose pgvector. Roll back with: kubectl -n si-lab delete networkpolicy pgvector-allow-control-layer
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pgvector-allow-control-layer
+  namespace: si-lab
+spec:
+  podSelector:
+    matchLabels:
+      app: pgvector
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: control-layer
+      ports:
+        - protocol: TCP
+          port: 5432

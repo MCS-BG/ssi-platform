@@ -1,0 +1,2 @@
+# Stdlib-only server (Day 10 sample + Day 16 GitHub REST backend). Kept empty so the
+# lab can run server.py from a ConfigMap on python:3.12-slim with no pip install.

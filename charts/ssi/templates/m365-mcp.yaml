@@ -1,0 +1,127 @@
+{{- if .Values.m365Mcp.enabled }}
+# Productivity MCP slot (Microsoft 365 via Graph, read-only, delegated sign-in).
+# Sign-in lives only in the Secret named by m365Mcp.authSecretName (keys: client_id,
+# token_cache.json, optional expected_account). It is optional: without it the pod is
+# Ready and every tool fails closed with a "sign in first" error. See docs/day-14-m365-mcp.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m365-mcp
+  namespace: {{ include "ssi.namespace" . }}
+  labels:
+    app: m365-mcp
+    {{- include "ssi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.m365Mcp }}
+  selector:
+    matchLabels:
+      app: m365-mcp
+  template:
+    metadata:
+      labels:
+        app: m365-mcp
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: m365-mcp
+          image: "{{ .Values.images.m365Mcp.repository }}:{{ .Values.images.m365Mcp.tag }}"
+          imagePullPolicy: {{ .Values.images.m365Mcp.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: PORT
+              value: "8000"
+            - name: AZURE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.m365Mcp.authSecretName }}
+                  key: client_id
+                  optional: true
+            - name: M365_EXPECTED_ACCOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.m365Mcp.authSecretName }}
+                  key: expected_account
+                  optional: true
+            - name: MSAL_AUTHORITY
+              value: {{ .Values.m365Mcp.authority | quote }}
+            - name: MSAL_TOKEN_CACHE
+              value: /var/run/secrets/m365/token_cache.json
+            - name: M365_SCOPES
+              value: {{ .Values.m365Mcp.scopes | quote }}
+            - name: M365_TIMEZONE
+              value: {{ .Values.m365Mcp.timezone | quote }}
+            - name: PROMPT_GUARD_URL
+              value: {{ .Values.m365Mcp.promptGuardUrl | quote }}
+            - name: PROMPT_GUARD_FAIL_OPEN
+              value: "false"
+            - name: HOME
+              value: /tmp
+            - name: OTEL_SERVICE_NAME
+              value: m365-mcp
+            - name: OTEL_TRACES_EXPORTER
+              value: {{ .Values.m365Mcp.otelTracesExporter | quote }}
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: auth
+              mountPath: /var/run/secrets/m365
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: auth
+          secret:
+            secretName: {{ .Values.m365Mcp.authSecretName }}
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: token_cache.json
+                path: token_cache.json
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m365-mcp
+  namespace: {{ include "ssi.namespace" . }}
+  labels:
+    app: m365-mcp
+    {{- include "ssi.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: m365-mcp
+  ports:
+    - name: http
+      port: {{ .Values.service.m365Mcp.port }}
+      targetPort: http
+{{- end }}

@@ -1,0 +1,13 @@
+server: "{{ k3s_server_url }}"
+token-file: "/etc/rancher/k3s/join-token"
+node-name: "{{ k3s_node_name }}"
+node-ip: "{{ node_ip }}"
+flannel-iface: "{{ k3s_flannel_iface }}"
+node-label:
+{% for label in k3s_node_labels %}
+  - "{{ label }}"
+{% endfor %}
+node-taint:
+{% for taint in k3s_node_taints %}
+  - "{{ taint }}"
+{% endfor %}

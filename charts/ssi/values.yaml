@@ -1,0 +1,172 @@
+# Day 12 Helm values for SSI on AKS (or any cluster).
+# Images default to placeholders — pin to ACR or GHCR digests in real runs.
+# Gateway token: create Secret ssi-gateway-auth (key: token) before install; do not put tokens here.
+
+namespace: si-lab
+createNamespace: true
+
+# Private reachability hostname for docs / NOTES (Private Link / internal DNS).
+# The home-lab VPN path is out of the enterprise story.
+privateEndpointHostname: ""
+
+# Quiet observability lane (Grafana + Langfuse). Only change when a step updates endpoints.
+observability:
+  grafanaEndpoint: ""
+  langfuseEndpoint: ""
+  azureMonitorEnabled: true
+
+images:
+  # Stdlib apps often ship via ConfigMap + python base on k3s; on AKS prefer built images.
+  gateway:
+    repository: ghcr.io/example/ssi-gateway
+    tag: "day-11"
+    pullPolicy: IfNotPresent
+  controlLayer:
+    repository: ghcr.io/example/control-layer
+    tag: "day-10"
+    pullPolicy: IfNotPresent
+  mcpServer:
+    repository: ghcr.io/example/mcp-server
+    tag: "day-08"
+    pullPolicy: IfNotPresent
+  engineeringMcp:
+    repository: ghcr.io/example/engineering-mcp
+    tag: "day-10"
+    pullPolicy: IfNotPresent
+  m365Mcp:
+    repository: ghcr.io/example/m365-mcp
+    tag: "day-14"
+    pullPolicy: IfNotPresent
+  # Shared python base when using ConfigMap-mounted source (lab pattern).
+  pythonBase:
+    repository: python
+    tag: "3.12-slim"
+    pullPolicy: IfNotPresent
+
+# Use ConfigMap-mounted source from sibling k8s/ manifests (thin wrapper mode).
+# When true, Deployments use pythonBase and expect ConfigMaps already applied
+# (or use --set with your own image builds). Day 12 docs show the Secret + Helm path.
+useConfigMapSource: false
+
+replicaCount:
+  gateway: 1
+  controlLayer: 1
+  mcpServer: 1
+  engineeringMcp: 1
+  m365Mcp: 1
+
+service:
+  gateway:
+    type: ClusterIP
+    port: 8080
+    # For AKS Internal LB + Private Link, set type LoadBalancer and annotations below.
+    annotations: {}
+    # example Internal LB:
+    # annotations:
+    #   service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+  controlLayer:
+    port: 8080
+  mcpServer:
+    port: 8000
+  engineeringMcp:
+    port: 8000
+  m365Mcp:
+    port: 8000
+
+gateway:
+  authSecretName: ssi-gateway-auth
+  authSecretKey: token
+  controlBase: "http://control-layer:8080"
+  businessMcpUrl: "http://mcp-server:8000/mcp"
+  engineeringMcpUrl: "http://engineering-mcp:8000/mcp"
+  businessMcpHost: "mcp-server:8000"
+  engineeringMcpHost: "engineering-mcp:8000"
+
+controlLayer:
+  # Swappable model slot: Ollama on GPU pool OR Azure OpenAI endpoint.
+  ollamaUrl: "http://ollama:11434"
+  model: "llama3.2:3b"
+  # OpenAI-compatible backend (Day 16): vLLM on a rented GPU or an AKS/EKS/GKE GPU pool,
+  # Azure OpenAI (https://<resource>.openai.azure.com/openai/v1), or any /v1/chat/completions
+  # server. Setting modelBaseUrl switches planning and synthesis to it (LLM_BACKEND=openai);
+  # modelName is the served model / deployment name. Empty = Ollama above.
+  modelBaseUrl: ""
+  modelName: ""
+  # "" = automatic (openai when modelBaseUrl is set, else ollama). Or "ollama" / "openai".
+  llmBackend: ""
+  # Optional API key for the OpenAI-compatible endpoint, from a Secret (never in values):
+  #   kubectl -n si-lab create secret generic control-layer-llm --from-literal=OPENAI_API_KEY=<PASTE_KEY>
+  openaiApiKeySecretName: ""
+  openaiApiKeySecretKey: OPENAI_API_KEY
+  # Day 16 planner: "model" = the model chooses MCP tools (native tool calling, validated,
+  # keyword fallback); "keyword" = the Day 15 keyword planner only.
+  planner: model
+  ollamaNumCtx: 4096
+  # Engineering questions without a repo name use this repo ("" = let the MCP decide).
+  engineeringDefaultRepo: "ssi-platform"
+  promptGuardUrl: "http://prompt-guard:8080/classify"
+  businessMcpUrl: "http://mcp-server:8000/mcp"
+  engineeringMcpUrl: "http://engineering-mcp:8000/mcp"
+  # Day 14 productivity slot (Microsoft 365). Host must be on m365-mcp's allowed list.
+  m365McpUrl: "http://m365-mcp:8000/mcp"
+  m365McpHost: "m365-mcp:8000"
+  maxToolCalls: 4
+  maxTokens: 512
+
+# Day 15 conversation memory: the control layer stores each /ask turn in Postgres
+# (table control_layer_turns, created at startup) and reloads the last `turns` turns
+# for the same conversation_id. Postgres unreachable = answers still work, without memory.
+# Default: the existing pgvector database, password from the pgvector-auth Secret.
+# Managed Postgres (Azure Database for PostgreSQL / Amazon RDS for PostgreSQL): create a
+# Secret with key DATABASE_URL and set databaseUrlSecretName. Never put credentials here.
+# The chart has no NetworkPolicies: when pgvector is policy-restricted, apply
+# pgvector-allow-control-layer (k8s/day-15-control-layer-memory.yaml) together with the
+# Day 6 pgvector-allow-clients policy (OpenTofu does both).
+memory:
+  enabled: true
+  turns: 6
+  maxChars: 2500
+  dsn: "host=pgvector port=5432 dbname=rag user=rag"
+  passwordSecretName: pgvector-auth
+  passwordSecretKey: POSTGRES_PASSWORD
+  databaseUrlSecretName: ""
+  databaseUrlSecretKey: DATABASE_URL
+
+# Day 16 engineering MCP data source. github.enabled=false keeps the Day 10 sample.
+# With true, the pod reads real GitHub data (GET only) using the fine-grained, read-only token in
+# the Secret named by tokenSecretName (key: token). Create it by hand; never put tokens here:
+#   kubectl -n si-lab create secret generic engineering-mcp-github --from-literal=token=<PASTE_TOKEN>
+# No Secret = the pod still starts and serves the sample. See docs/day-16-real-cross-system-answers.md.
+engineeringMcp:
+  github:
+    enabled: false
+    tokenSecretName: engineering-mcp-github
+    owner: "MCS-BG"
+    # Optional allowlist, comma-separated repository names ("" = every repo the token can see).
+    repos: ""
+    cacheSeconds: 60
+    promptGuardUrl: "http://prompt-guard:8080/classify"
+    # Egress-only NetworkPolicy: DNS, Prompt Guard, OTel collector, HTTPS 443 to public IPs.
+    egressNetworkPolicy: true
+
+# Day 14 productivity MCP (Microsoft 365 via Graph, read-only, delegated sign-in).
+# Create the Secret after the one-time sign-in (docs/day-14-m365-mcp.md); never put tokens here.
+m365Mcp:
+  enabled: true
+  authSecretName: m365-mcp-auth
+  # common = any Entra ID tenant + personal Microsoft accounts
+  authority: "https://login.microsoftonline.com/common"
+  scopes: "User.Read Mail.Read Calendars.Read Files.Read"
+  timezone: "Central Standard Time"
+  promptGuardUrl: "http://prompt-guard:8080/classify"
+  # "otlp" plus OTEL_EXPORTER_OTLP_ENDPOINT (via extra env) to send traces; "none" keeps it quiet.
+  otelTracesExporter: "none"
+
+# Prompt Guard is unchanged from Day 7/8 — chart does not redeploy it.
+# Install or leave the existing prompt-guard Deployment in si-lab.
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,63 @@
+- name: Read the NVIDIA driver version
+  ansible.builtin.command: nvidia-smi --query-gpu=driver_version --format=csv,noheader
+  register: nvidia_smi
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install the pinned NVIDIA driver when none is present
+  ansible.builtin.apt:
+    name: "{{ nvidia_driver_package }}"
+    state: present
+    update_cache: true
+  when: nvidia_manage_driver and nvidia_smi.rc != 0
+  notify: Reboot required for the NVIDIA driver
+
+- name: Driver matches the pin
+  ansible.builtin.assert:
+    that:
+      - nvidia_smi.rc == 0
+      - nvidia_smi.stdout_lines | first | trim == nvidia_driver_version
+    fail_msg: "nvidia-smi reports '{{ nvidia_smi.stdout | default('') }}', expected {{ nvidia_driver_version }}. Reboot after a driver install, or update the pin on purpose."
+  when: nvidia_smi.rc == 0 or not nvidia_manage_driver
+
+- name: Check for the NVIDIA container toolkit keyring
+  ansible.builtin.stat:
+    path: "{{ nvidia_toolkit_keyring }}"
+  register: nvidia_keyring
+
+- name: Add the NVIDIA container toolkit signing key (first run only)
+  when: not nvidia_keyring.stat.exists
+  block:
+    - name: Download the key
+      ansible.builtin.get_url:
+        url: "{{ nvidia_toolkit_gpgkey_url }}"
+        dest: /tmp/nvidia-container-toolkit.gpgkey
+        mode: "0644"
+
+    - name: Dearmor the key into the keyring
+      ansible.builtin.command: gpg --dearmor -o {{ nvidia_toolkit_keyring }} /tmp/nvidia-container-toolkit.gpgkey
+      args:
+        creates: "{{ nvidia_toolkit_keyring }}"
+
+- name: NVIDIA container toolkit apt source (same file as Day 2)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [signed-by={{ nvidia_toolkit_keyring }}] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /
+      #deb [signed-by={{ nvidia_toolkit_keyring }}] https://nvidia.github.io/libnvidia-container/experimental/deb/$(ARCH) /
+  register: nvidia_apt_source
+
+- name: Refresh apt after adding the source
+  ansible.builtin.apt:
+    update_cache: true
+  when: nvidia_apt_source.changed
+
+- name: NVIDIA container toolkit (pinned)
+  ansible.builtin.apt:
+    name: "{{ nvidia_container_toolkit_packages }}"
+    state: present
+  notify: Restart k3s

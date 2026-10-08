@@ -1,0 +1,27 @@
+# CI build check for the mcp-server image: builds apps/mcp-server/ but does not push to ghcr.io. Runs on pushes to main that change apps/mcp-server/ or these workflow files.
+# "Run workflow" on the Actions tab (workflow_dispatch) runs it by hand.
+name: build mcp-server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/mcp-server/**"
+      - ".github/workflows/build-mcp-server.yml"
+      - ".github/workflows/_build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-mcp-server
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-image.yml
+    with:
+      app: mcp-server
+    permissions:
+      contents: read

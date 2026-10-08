@@ -1,0 +1,100 @@
+{
+  "name": "ssi-connector",
+  "displayName": "SSI Connector",
+  "description": "Connect VS Code and Cursor to your company's private SSI (Sovereign Super Intelligence) control layer and its business and engineering MCP gateways.",
+  "version": "0.1.0",
+  "publisher": "ssi-lab",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MCS-BG/ssi-platform"
+  },
+  "homepage": "https://github.com/MCS-BG/ssi-platform/tree/main/apps/ssi-vscode-connector",
+  "bugs": {
+    "url": "https://github.com/MCS-BG/ssi-platform/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning",
+    "AI"
+  ],
+  "keywords": [
+    "SSI",
+    "Sovereign Super Intelligence",
+    "MCP",
+    "control layer",
+    "private network"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "ssi.connect", "title": "Connect", "category": "SSI" },
+      { "command": "ssi.disconnect", "title": "Disconnect", "category": "SSI" },
+      { "command": "ssi.setToken", "title": "Set Token", "category": "SSI" },
+      { "command": "ssi.clearToken", "title": "Clear Token", "category": "SSI" },
+      { "command": "ssi.showStatus", "title": "Show Connection Status", "category": "SSI" },
+      { "command": "ssi.copyMcpConfig", "title": "Copy MCP Config", "category": "SSI" }
+    ],
+    "configuration": {
+      "title": "SSI Connector",
+      "properties": {
+        "ssi.endpoint": {
+          "type": "string",
+          "default": "",
+          "order": 0,
+          "markdownDescription": "Base URL of your company's private SSI endpoint (reached over Private Link, VPN, or the corporate private network). No trailing slash. Example: `https://ssi.corp.example`. The bearer token is stored separately: run **SSI: Set Token**."
+        },
+        "ssi.controlPath": {
+          "type": "string",
+          "default": "/control",
+          "order": 1,
+          "markdownDescription": "Path under `ssi.endpoint` where the gateway exposes the SSI control layer (the only agent loop). **SSI: Connect** checks `GET {endpoint}{controlPath}/healthz`."
+        },
+        "ssi.businessMcpPath": {
+          "type": "string",
+          "default": "/mcp/business",
+          "order": 2,
+          "markdownDescription": "Path under `ssi.endpoint` for the business MCP gateway."
+        },
+        "ssi.engineeringMcpPath": {
+          "type": "string",
+          "default": "/mcp/engineering",
+          "order": 3,
+          "markdownDescription": "Path under `ssi.endpoint` for the engineering MCP gateway."
+        },
+        "ssi.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "order": 4,
+          "description": "Show SSI connection status in the status bar."
+        },
+        "ssi.token": {
+          "type": "string",
+          "default": "",
+          "order": 99,
+          "deprecationMessage": "Deprecated: the SSI token now lives in VS Code Secret Storage. Run SSI: Set Token. Any value here is moved into Secret Storage once and then cleared.",
+          "markdownDescription": "**Deprecated.** Use **SSI: Set Token**. A value here is migrated into Secret Storage once and then removed from settings."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.3.0"
+  }
+}

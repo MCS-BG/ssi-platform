@@ -1,0 +1,140 @@
+# day-05b-open-webui-cloud-models.yaml: cloud models in Open WebUI v0.11.4 through an OpenAI-compatible connection
+#
+# Primary: Azure OpenAI / Microsoft Foundry, v1 API (no api-version):
+#   https://<resource>.openai.azure.com/openai/v1   (Foundry resources can also use https://<resource>.services.ai.azure.com/openai/v1)
+#   https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle
+# Open WebUI v0.11.4 source (backend/open_webui/routers/openai.py): when a base URL matches /openai/v1, Azure mode
+# skips the /openai/deployments/{model} rewrite and api-version, and posts to <url>/chat/completions with the
+# deployment name in "model". With "azure": true it sends the key in the api-key header (Microsoft's documented REST form).
+#
+# What this file contains
+#   1. ConfigMap open-webui-cloud: the non-secret connection values. EDIT the two CHANGE-ME values first.
+#   2. Deployment open-webui: the full day 5 v0.11.4 Deployment (theme mount included) plus 4 new env vars.
+#   The key lives in Secret open-webui-cloud-keys, created from the terminal (see add-models-steps.md), never in git.
+#   The day 5 PVC, Service, Secret open-webui-secret and ConfigMap open-webui-theme are unchanged and not repeated here.
+#
+# !! PersistentConfig ("ConfigVar") caveat !!
+#   OPENAI_API_BASE_URLS, OPENAI_API_KEYS and OPENAI_API_CONFIGS are ConfigVars. Open WebUI already started on day 5,
+#   so its database already holds openai.api_base_urls=["https://api.openai.com/v1"], openai.api_keys=[""] and
+#   openai.api_configs={} (seeded at first start). Existing DB rows win over env vars, so applying this file ALONE
+#   changes nothing in the UI. add-models-steps.md step 7 re-seeds only those three rows from env (option A) or uses
+#   the Admin UI (option B). Do NOT use RESET_CONFIG_ON_START=true (wipes every saved setting, including the day 6
+#   MCP tool server connection) or ENABLE_PERSISTENT_CONFIG=false (Admin UI changes stop persisting).
+#   https://docs.openwebui.com/reference/env-configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open-webui-cloud
+  namespace: si-lab
+  labels:
+    app: open-webui
+data:
+  # One URL per connection, ";"-separated, same order as the keys in OPENAI_API_KEYS. No trailing slash.
+  OPENAI_API_BASE_URLS: "https://CHANGE-ME-resource.openai.azure.com/openai/v1"
+  # Per-connection settings keyed by position ("0" = first URL). Fields verified against API_CONFIG_FIELDS in
+  # backend/open_webui/models/config.py (v0.11.4).
+  #   model_ids   = your Azure DEPLOYMENT names (not the model family names). Required: with Azure mode on, Open WebUI
+  #                 lists exactly these instead of calling /models.
+  #   prefix_id   = shown in the dropdown as "azure.<deployment>"; stripped again before the request goes to Azure.
+  #   api_version = ignored for /openai/v1 URLs in v0.11.4; present only because the Admin UI edit dialog refuses to
+  #                 save an Azure connection with an empty API Version.
+  OPENAI_API_CONFIGS: |
+    {"0": {"enable": true, "provider": "azure", "azure": true, "api_version": "v1", "auth_type": "bearer",
+           "connection_type": "external", "prefix_id": "azure",
+           "model_ids": ["CHANGE-ME-deployment-1", "CHANGE-ME-deployment-2"]}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: si-lab
+  labels:
+    app: open-webui
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui:v0.11.4   # pinned: custom.css depends on v0.11.4 markup
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.si-lab.svc.cluster.local:11434"
+            - name: RAG_EMBEDDING_ENGINE
+              value: "ollama"
+            - name: RAG_EMBEDDING_MODEL
+              value: "nomic-embed-text"
+            - name: ANONYMIZED_TELEMETRY
+              value: "false"
+            - name: DO_NOT_TRACK
+              value: "true"
+            - name: SCARF_NO_ANALYTICS
+              value: "true"
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-webui-secret
+                  key: WEBUI_SECRET_KEY
+            # ---- NEW (day 5b): cloud models through an OpenAI-compatible connection ----
+            - name: AZURE_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-webui-cloud-keys
+                  key: AZURE_OPENAI_API_KEY
+            - name: OPENAI_API_KEYS
+              # Kubernetes expands $(VAR) from env vars defined ABOVE. For a 2nd connection:
+              # "$(AZURE_OPENAI_API_KEY);$(BEDROCK_API_KEY)" (see the AWS section in add-models-steps.md).
+              value: "$(AZURE_OPENAI_API_KEY)"
+            - name: OPENAI_API_BASE_URLS
+              valueFrom:
+                configMapKeyRef:
+                  name: open-webui-cloud
+                  key: OPENAI_API_BASE_URLS
+            - name: OPENAI_API_CONFIGS
+              valueFrom:
+                configMapKeyRef:
+                  name: open-webui-cloud
+                  key: OPENAI_API_CONFIGS
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+            - name: theme
+              mountPath: /app/build/static/custom.css
+              subPath: custom.css
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: open-webui-data
+        - name: theme
+          configMap:
+            name: open-webui-theme

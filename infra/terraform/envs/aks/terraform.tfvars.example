@@ -1,0 +1,30 @@
+# Copy to terraform.tfvars (git-ignored) and adjust. No secrets belong here
+# (they go in secrets.auto.tfvars). Subscription comes from ARM_SUBSCRIPTION_ID.
+
+location            = "eastus"
+name_prefix         = "ssi"
+kubernetes_version  = "1.31.2"
+system_node_vm_size = "Standard_D4s_v5"
+system_node_count   = 1
+enable_private_dns  = true
+
+# GPU pool for the model server. OFF by default (quota + cost).
+enable_gpu_pool     = false
+gpu_pool_vm_size    = "Standard_ND96isr_H100_v5"
+gpu_pool_node_count = 1
+gpus_per_node       = 8
+
+# Model slot: ollama (Llama 3.2 3B) or vllm (e.g. Beam, needs the GPU pool).
+model_backend = "ollama"
+
+# App layer
+deploy_apps            = true
+ssi_control_plane_mode = "manifests"
+image_registry         = "ghcr.io/mcs-bg"
+enable_observability   = false
+gateway_internal_lb    = true
+
+tags = {
+  project = "ssi"
+  lab     = "day-13"
+}

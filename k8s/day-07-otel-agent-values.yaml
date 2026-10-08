@@ -1,0 +1,86 @@
+# Day 7 (stage C, optional): OpenTelemetry Collector "agent" DaemonSet that tails container logs
+# (/var/log/pods via the filelog preset) on BOTH nodes and ships them to Loki over OTLP.
+# Runs in monitoring-host (privileged PSA) because it mounts hostPath /var/log/pods.
+# Chart: open-telemetry/opentelemetry-collector 0.173.1 (collector 0.160.0), image otelcol-k8s.
+# Install (after Loki):
+#   helm upgrade -i otel-agent open-telemetry/opentelemetry-collector --version 0.173.1 \
+#     -n monitoring-host -f ~/ssi-platform/k8s/day-07-otel-agent-values.yaml
+fullnameOverride: otel-agent
+mode: daemonset
+
+image:
+  repository: otel/opentelemetry-collector-k8s
+
+# Tolerate the monitoring node taint so the agent runs on both nodes.
+tolerations:
+  - key: ailab/role
+    operator: Equal
+    value: observability
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 48Mi
+  limits:
+    memory: 192Mi
+
+# /var/log/pods/*/*/*.log are root-owned 0640 on k3s/containerd, so the agent reads them as
+# root, but with every capability dropped, no privilege escalation and a read-only root FS.
+securityContext:
+  runAsUser: 0
+  runAsGroup: 0
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+presets:
+  logsCollection:
+    enabled: true
+    includeCollectorLogs: false
+  kubernetesAttributes:
+    enabled: true
+
+# No OTLP/Jaeger/Zipkin ports: this agent only reads files. Only its own metrics port stays.
+ports:
+  otlp:
+    enabled: false
+  otlp-http:
+    enabled: false
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+    otlp: null
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch:
+      send_batch_size: 512
+      timeout: 5s
+  exporters:
+    otlp_http/loki:
+      endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
+      sending_queue:
+        queue_size: 200
+  service:
+    pipelines:
+      traces: null
+      metrics: null
+      logs:
+        receivers: [file_log]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp_http/loki]

@@ -1,0 +1,46 @@
+# Kubernetes access: never commit a kubeconfig
+*.kubeconfig
+kubeconfig*
+k3s*.yaml
+.kube/
+
+# Secrets and local environment files
+*.env
+.env*
+*.pem
+*.key
+*secret*.txt
+*-token*
+secrets/
+
+# Screenshots and files waiting for redaction: only "-redacted" Langfuse screenshots are committed
+*-NEEDS-REDACT*
+screenshots/day-*-langfuse-*.png
+!screenshots/*-redacted.png
+
+# Personal copies and local archives
+*.personal.md
+ssi-platform-*.zip
+ssi-platform-*.tar.gz
+
+# Python and tooling
+__pycache__/
+*.pyc
+.venv/
+venv/
+research/cache/
+diagrams/check.png
+
+# macOS
+.DS_Store
+research/hw/
+
+# Infrastructure as code (Day 13): state, plans, local vars, inventories
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+secrets.auto.tfvars
+infra/ansible/inventory.ini
+*.retry

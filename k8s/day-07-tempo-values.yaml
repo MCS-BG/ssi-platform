@@ -1,0 +1,43 @@
+# Day 7 (stage C): Tempo 3 monolithic on the monitoring node, local-disk backend, 48h retention.
+# Receives traces from the OpenTelemetry Collector over OTLP gRPC (4317). Grafana queries port 3200.
+# Chart: grafana-community/tempo 3.0.0 (Tempo 3.0.3). Fallback if 3.x misbehaves:
+#   grafana-community/tempo 2.4.0 (Tempo 2.10.8) with the same keys minus liveStore.
+# Install:
+#   helm upgrade -i tempo grafana-community/tempo --version 3.0.0 \
+#     -n monitoring -f ~/ssi-platform/k8s/day-07-tempo-values.yaml
+replicas: 1
+
+tempo:
+  reportingEnabled: false
+  multitenancyEnabled: false
+  retention: 48h
+  metricsGenerator:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 768Mi
+  # The chart's service template requires the default Jaeger receivers to stay defined
+  # (setting them to null breaks the render). They are harmless: day-07-netpol.yaml only
+  # admits 3200 and 4317/4318 from the monitoring namespace.
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClassName: local-path
+
+nodeSelector:
+  ailab/role: observability
+tolerations:
+  - key: ailab/role
+    operator: Equal
+    value: observability
+    effect: NoSchedule

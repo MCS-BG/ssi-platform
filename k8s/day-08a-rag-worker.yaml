@@ -1,0 +1,105 @@
+# Day 8a: rag-worker on its own image (ghcr.io/<owner>/rag-worker), built by GitHub Actions.
+# Replaces the Day 4 Deployment and the Day 7 OTel patch in one file:
+# - no pip install at start: psycopg, requests and the OpenTelemetry packages are in the image
+# - ask.py and ingest.py are in the image (/app), so the rag-scripts ConfigMap is no longer mounted
+# - ask.py / ingest.py send keep_alive "-1m" on their /api/embed calls (embedding model only)
+# - runs as UID 10001 with a read-only root filesystem
+# The PV, PVC and ConfigMap from day-04-rag-worker.yaml are unchanged (the ConfigMap is unused now).
+# The image line is pinned to a commit SHA by scripts/pin-images.sh (Day 8a step 7).
+# Apply:
+#   kubectl apply -f ~/ssi-platform/k8s/day-08a-rag-worker.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-worker
+  namespace: si-lab
+  labels:
+    app: rag-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-worker
+  template:
+    metadata:
+      labels:
+        app: rag-worker
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: gpu-node
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: ghcr.io/mcs-bg/rag-worker:5144638
+          command: ["sleep", "infinity"]
+          workingDir: /app
+          env:
+            - name: OLLAMA_URL
+              value: http://ollama.si-lab.svc.cluster.local:11434
+            - name: PG_DSN
+              value: host=pgvector.si-lab.svc.cluster.local port=5432 dbname=rag user=rag
+            - name: DOCS_DIR
+              value: /docs
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pgvector-auth
+                  key: POSTGRES_PASSWORD
+            - name: HOME
+              value: /tmp
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: EMBED_KEEP_ALIVE
+              value: "-1m"
+            - name: OTEL_SERVICE_NAME
+              value: rag-worker
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=si-lab,deployment.environment.name=homelab
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.monitoring.svc.cluster.local:4318
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: http/protobuf
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import psycopg, requests, opentelemetry.distro"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: docs
+              mountPath: /docs
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: docs
+          persistentVolumeClaim:
+            claimName: rag-docs
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

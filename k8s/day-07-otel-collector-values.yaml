@@ -1,0 +1,136 @@
+# Day 7: OpenTelemetry Collector "gateway" (one Deployment on the monitoring node).
+# Chart: open-telemetry/opentelemetry-collector 0.173.1 (collector 0.160.0), image otelcol-k8s.
+# Apps in si-lab send OTLP to http://otel-collector.monitoring.svc.cluster.local:4318 (HTTP)
+# or :4317 (gRPC). The collector fans out:
+#   traces  -> Langfuse (/api/public/otel, OTLP/HTTP only; otlp_http exporter) and Tempo (OTLP/gRPC)
+#   metrics -> Prometheus OTLP receiver (/api/v1/otlp)
+#   logs    -> Loki OTLP endpoint (/otlp)
+# This base file wires stage A only (traces/logs to the debug exporter, metrics to Prometheus).
+# Stages B and C swap the pipelines with the small overlay files day-07-otel-collector-stage-*.yaml.
+# Install (stage A):
+#   helm upgrade -i otel-collector open-telemetry/opentelemetry-collector --version 0.173.1 \
+#     -n monitoring -f ~/ssi-platform/k8s/day-07-otel-collector-values.yaml
+fullnameOverride: otel-collector
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-k8s
+
+nodeSelector:
+  ailab/role: observability
+tolerations:
+  - key: ailab/role
+    operator: Equal
+    value: observability
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# Adds k8s.namespace.name, k8s.pod.name, k8s.deployment.name, ... to every signal
+# (read-only ClusterRole on pods/namespaces/replicasets).
+presets:
+  kubernetesAttributes:
+    enabled: true
+
+# Only OTLP in; the Jaeger and Zipkin receivers are removed.
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+  metrics:
+    enabled: true
+
+serviceMonitor:
+  enabled: true
+  metricsEndpoints:
+    - port: metrics
+      interval: 30s
+
+extraEnvs:
+  # "Basic base64(pk-lf-...:sk-lf-...)" for Langfuse. optional=true so stage A starts
+  # before the Secret exists.
+  - name: LANGFUSE_AUTH_HEADER
+    valueFrom:
+      secretKeyRef:
+        name: langfuse-otlp-auth
+        key: authorization
+        optional: true
+
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+    otlp:
+      protocols:
+        grpc:
+          endpoint: ${env:MY_POD_IP}:4317
+        http:
+          endpoint: ${env:MY_POD_IP}:4318
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch:
+      send_batch_size: 512
+      timeout: 5s
+  exporters:
+    debug:
+      verbosity: basic
+    otlp_http/prometheus:
+      endpoint: http://kps-prometheus.monitoring.svc.cluster.local:9090/api/v1/otlp
+      tls:
+        insecure: true
+    otlp_http/langfuse:
+      endpoint: http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel
+      headers:
+        Authorization: ${env:LANGFUSE_AUTH_HEADER}
+        x-langfuse-ingestion-version: "4"
+      sending_queue:
+        queue_size: 200
+    otlp_grpc/tempo:
+      endpoint: tempo.monitoring.svc.cluster.local:4317
+      tls:
+        insecure: true
+      sending_queue:
+        queue_size: 200
+    otlp_http/loki:
+      endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
+      sending_queue:
+        queue_size: 200
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [debug]
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp_http/prometheus]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [debug]

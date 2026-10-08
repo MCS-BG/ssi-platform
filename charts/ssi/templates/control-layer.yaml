@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-layer
+  namespace: {{ include "ssi.namespace" . }}
+  labels:
+    app: control-layer
+    {{- include "ssi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.controlLayer }}
+  selector:
+    matchLabels:
+      app: control-layer
+  template:
+    metadata:
+      labels:
+        app: control-layer
+    spec:
+      containers:
+        - name: control-layer
+          image: "{{ .Values.images.controlLayer.repository }}:{{ .Values.images.controlLayer.tag }}"
+          imagePullPolicy: {{ .Values.images.controlLayer.pullPolicy }}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: OLLAMA_URL
+              value: {{ .Values.controlLayer.ollamaUrl | quote }}
+            - name: MODEL
+              value: {{ .Values.controlLayer.model | quote }}
+            - name: PROMPT_GUARD_URL
+              value: {{ .Values.controlLayer.promptGuardUrl | quote }}
+            - name: BUSINESS_MCP_URL
+              value: {{ .Values.controlLayer.businessMcpUrl | quote }}
+            - name: ENGINEERING_MCP_URL
+              value: {{ .Values.controlLayer.engineeringMcpUrl | quote }}
+            - name: M365_MCP_URL
+              value: {{ .Values.controlLayer.m365McpUrl | quote }}
+            - name: M365_MCP_HOST
+              value: {{ .Values.controlLayer.m365McpHost | quote }}
+            - name: MAX_TOOL_CALLS
+              value: {{ .Values.controlLayer.maxToolCalls | quote }}
+            - name: MAX_TOKENS
+              value: {{ .Values.controlLayer.maxTokens | quote }}
+            # Day 15 conversation memory (docs/day-15-conversation-memory.md)
+            - name: MEMORY_ENABLED
+              value: {{ .Values.memory.enabled | quote }}
+            {{- if .Values.memory.enabled }}
+            - name: MEMORY_TURNS
+              value: {{ .Values.memory.turns | quote }}
+            - name: MEMORY_MAX_CHARS
+              value: {{ .Values.memory.maxChars | quote }}
+            {{- if .Values.memory.databaseUrlSecretName }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.memory.databaseUrlSecretName }}
+                  key: {{ .Values.memory.databaseUrlSecretKey }}
+                  optional: true
+            {{- else }}
+            - name: PG_DSN
+              value: {{ .Values.memory.dsn | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.memory.passwordSecretName }}
+                  key: {{ .Values.memory.passwordSecretKey }}
+                  optional: true
+            {{- end }}
+            {{- end }}
+            # Day 16 model planner + LLM backend (docs/day-16-real-cross-system-answers.md)
+            - name: PLANNER
+              value: {{ .Values.controlLayer.planner | default "model" | quote }}
+            - name: ENGINEERING_DEFAULT_REPO
+              value: {{ .Values.controlLayer.engineeringDefaultRepo | quote }}
+            - name: OLLAMA_NUM_CTX
+              value: {{ .Values.controlLayer.ollamaNumCtx | quote }}
+            - name: LLM_BACKEND
+              value: {{ .Values.controlLayer.llmBackend | default (ternary "openai" "ollama" (not (empty .Values.controlLayer.modelBaseUrl))) | quote }}
+            {{- if .Values.controlLayer.modelBaseUrl }}
+            - name: OPENAI_BASE_URL
+              value: {{ .Values.controlLayer.modelBaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.controlLayer.modelName }}
+            - name: OPENAI_MODEL
+              value: {{ .Values.controlLayer.modelName | quote }}
+            {{- end }}
+            {{- if .Values.controlLayer.openaiApiKeySecretName }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.controlLayer.openaiApiKeySecretName }}
+                  key: {{ .Values.controlLayer.openaiApiKeySecretKey | default "OPENAI_API_KEY" }}
+                  optional: true
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-layer
+  namespace: {{ include "ssi.namespace" . }}
+  labels:
+    app: control-layer
+    {{- include "ssi.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: control-layer
+  ports:
+    - name: http
+      port: {{ .Values.service.controlLayer.port }}
+      targetPort: http

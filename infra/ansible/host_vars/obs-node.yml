@@ -1,0 +1,16 @@
+# Agent node: observability (Prometheus, Grafana, Loki, Tempo, Langfuse).
+# Reserve this IP for the agent node's Wi-Fi MAC on the router.
+node_ip: "192.0.2.94"
+k3s_node_name: obs-node
+k3s_flannel_iface: <wifi-iface>
+k3s_node_labels:
+  - "ailab/role=observability"
+k3s_node_taints:
+  - "ailab/role=observability:NoSchedule"
+
+ufw_peer_rules:
+  - { from: "{{ k3s_server_ip }}", port: "8472", proto: udp, comment: "flannel vxlan from lab host" }
+  - { from: "{{ k3s_server_ip }}", port: "10250", proto: tcp, comment: "kubelet from lab host" }
+
+data_mounts: []
+data_dirs: []

@@ -1,0 +1,67 @@
+# Reusable workflow: build one app image from apps/<app>/ for linux/amd64 as a CI check.
+# This public repo builds and checks every image but does not push to ghcr.io, so CI can never
+# overwrite the images a running lab pulls. To publish your own images from a fork, add a
+# docker/login-action step, set push: true and grant packages: write.
+# Called by every build-*.yml workflow in this folder.
+# Docs:
+#   https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images
+#   https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
+#   https://github.com/docker/build-push-action  https://github.com/docker/metadata-action
+name: build image (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Folder name under apps/ and image name on ghcr.io
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Image name (ghcr.io needs lowercase)
+        id: image
+        env:
+          APP: ${{ inputs.app }}
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${APP}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=sha,format=short,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=${{ inputs.app }}
+            org.opencontainers.image.description=ssi-platform ${{ inputs.app }} image
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build (linux/amd64, no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: apps/${{ inputs.app }}
+          platforms: linux/amd64
+          push: false
+          outputs: type=cacheonly
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha,scope=${{ inputs.app }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.app }}

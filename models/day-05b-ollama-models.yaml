@@ -1,0 +1,286 @@
+# day-05b-ollama-models.yaml: declarative Ollama model list + a pull Job (no exec into the Ollama pod)
+#
+# How it works
+#   ConfigMap ollama-models      -> models.txt, one Ollama tag per line (# comments and blank lines ignored)
+#   ConfigMap ollama-pull-script -> pull.py (Python stdlib only, no pip install)
+#   Job ollama-pull              -> python:3.12-slim (already cached on the node from days 4 and 6) calls the
+#                                   Ollama HTTP API on svc/ollama:  POST /api/pull, POST /api/show, GET /api/tags
+#                                   (and DELETE /api/delete only when PRUNE=true).
+#   Models land where Ollama writes them: OLLAMA_MODELS=/models on PVC ollama-models
+#   -> PV ollama-models-pv -> /mnt/ailab-data/ai-ops-homelab/ollama on the external drive.
+#   Note: the ConfigMap "ollama-models" and the day 3 PVC "ollama-models" share a name. They are different
+#   kinds, so Kubernetes allows it; the Job does not mount the PVC at all.
+#
+# Re-run after editing the list (Jobs are immutable):
+#   kubectl -n si-lab delete job ollama-pull --ignore-not-found
+#   kubectl apply -f day-05b-ollama-models.yaml
+#
+# Remove a model: take it off the list, then either call DELETE /api/delete (see add-models-steps.md)
+# or re-run this Job with PRUNE=true (deletes every installed model that is NOT on the list).
+#
+# Pod Security: the namespace enforces baseline; this pod also satisfies "restricted"
+# (non-root, no privilege escalation, all capabilities dropped, RuntimeDefault seccomp, read-only rootfs).
+#
+# Sizes below are the download size shown on ollama.com/library (Q4_K_M, checked 2026-09-25).
+# VRAM when loaded is roughly download size + KV cache for the 4096-token default context + runtime overhead;
+# day 3 measured llama3.2:3b (2.0 GB on disk) at 2.6 GB in `ollama ps`. The VRAM numbers are estimates:
+# confirm with /api/ps (size_vram) or `ollama ps` after the first prompt.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ollama-models
+  namespace: si-lab
+  labels:
+    app: ollama-pull
+data:
+  models.txt: |
+    # ---- already installed (days 3-4); keep them listed so PRUNE=true never deletes them ----
+    llama3.2:3b             # 2.0 GB disk, ~2.6 GB VRAM measured (day 3). General chat, tools. Used by rag-worker.
+    nomic-embed-text:latest # 274 MB disk, <1 GB VRAM. Embeddings for rag-worker, mcp-server and Open WebUI RAG.
+    # ---- new starter models (all fit a 4 GB card one at a time) ----
+    qwen2.5-coder:1.5b      # 986 MB disk, ~1.3-1.6 GB VRAM est. Coding. Apache-2.0. Ollama caps: tools.
+    qwen3:4b                # 2.5 GB disk, ~3.0-3.5 GB VRAM est. Reasoning/general (thinking mode). Apache-2.0. Caps: tools, thinking.
+    granite4.1:3b           # 2.1 GB disk, ~2.5-3.0 GB VRAM est. Tool calling / structured JSON for the MCP layer. Apache-2.0. Caps: tools.
+    # ---- optional, not pulled by default (uncomment to add) ----
+    # deepseek-r1:1.5b      # 1.1 GB disk. Tiny reasoning model (MIT).
+    # qwen2.5-coder:3b      # 1.9 GB disk. Better coder, but Qwen RESEARCH license (non-commercial).
+    # 7B 4-bit models (e.g. qwen2.5-coder:7b, 4.7 GB) do NOT fit fully in 4 GB VRAM and will split CPU/GPU.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ollama-pull-script
+  namespace: si-lab
+  labels:
+    app: ollama-pull
+data:
+  pull.py: |
+    """Pull every model listed in models.txt through the Ollama HTTP API and report the result.
+
+    Env:
+      OLLAMA_URL     default http://ollama.si-lab.svc.cluster.local:11434
+      MODELS_FILE    default /config/models.txt
+      SKIP_EXISTING  "true" (default): do not re-pull models that are already installed, so a re-run never
+                     silently updates a tag (important for nomic-embed-text: new weights = incompatible vectors).
+                     "false": re-pull everything (picks up upstream tag updates).
+      PRUNE          "false" (default). "true": DELETE /api/delete every installed model that is not listed.
+    Exit code 0 only if every listed model is present at the end.
+    """
+    import json
+    import os
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    OLLAMA = os.environ.get("OLLAMA_URL", "http://ollama.si-lab.svc.cluster.local:11434").rstrip("/")
+    MODELS_FILE = os.environ.get("MODELS_FILE", "/config/models.txt")
+    SKIP_EXISTING = os.environ.get("SKIP_EXISTING", "true").lower() == "true"
+    PRUNE = os.environ.get("PRUNE", "false").lower() == "true"
+
+
+    def log(msg):
+        print(time.strftime("%H:%M:%S"), msg, flush=True)
+
+
+    def request(method, path, body=None, timeout=30):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(OLLAMA + path, data=data, method=method,
+                                     headers={"Content-Type": "application/json"})
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
+    def norm(name):
+        return name if ":" in name else name + ":latest"
+
+
+    def read_list():
+        models = []
+        with open(MODELS_FILE) as fh:
+            for line in fh:
+                name = line.split("#", 1)[0].strip()
+                if name and norm(name) not in models:
+                    models.append(norm(name))
+        return models
+
+
+    def installed():
+        with request("GET", "/api/tags") as r:
+            return {m["name"]: m for m in json.load(r).get("models", [])}
+
+
+    def wait_for_ollama(deadline_s=300):
+        start = time.time()
+        while True:
+            try:
+                with request("GET", "/api/version", timeout=5) as r:
+                    log(f"Ollama is up at {OLLAMA}, version {json.load(r).get('version')}")
+                    return
+            except (urllib.error.URLError, OSError) as exc:
+                if time.time() - start > deadline_s:
+                    log(f"ERROR: Ollama not reachable at {OLLAMA}: {exc}")
+                    sys.exit(2)
+                time.sleep(5)
+
+
+    def pull(model):
+        """Stream POST /api/pull, print coarse progress, return True on status=success."""
+        last_pct = {}
+        last_status = None
+        try:
+            # timeout applies per socket read; big layers can go quiet for a while on a slow link
+            with request("POST", "/api/pull", {"model": model, "stream": True}, timeout=900) as r:
+                for raw in r:
+                    line = raw.decode().strip()
+                    if not line:
+                        continue
+                    evt = json.loads(line)
+                    if "error" in evt:
+                        log(f"  {model}: ERROR {evt['error']}")
+                        return False
+                    status = evt.get("status", "")
+                    if evt.get("total") and evt.get("completed") is not None:
+                        pct = int(evt["completed"] * 100 / evt["total"]) // 25 * 25
+                        key = evt.get("digest", "")
+                        if last_pct.get(key) != pct:
+                            last_pct[key] = pct
+                            log(f"  {model}: {status} {pct}% of {evt['total'] / 1e9:.2f} GB")
+                    elif status != last_status:
+                        log(f"  {model}: {status}")
+                    last_status = status
+            return last_status == "success"
+        except urllib.error.HTTPError as exc:
+            log(f"  {model}: HTTP {exc.code} {exc.read().decode(errors='replace')[:300]}")
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            log(f"  {model}: FAILED {exc}")
+        return False
+
+
+    def show(model):
+        try:
+            with request("POST", "/api/show", {"model": model}) as r:
+                info = json.load(r)
+            details = info.get("details", {})
+            caps = ",".join(info.get("capabilities", [])) or "-"
+            return f"{details.get('parameter_size', '?'):>6} {details.get('quantization_level', '?'):<7} caps={caps}"
+        except Exception as exc:  # noqa: BLE001 - report only
+            return f"(show failed: {exc})"
+
+
+    def main():
+        wanted = read_list()
+        if not wanted:
+            log("ERROR: model list is empty, refusing to do anything")
+            sys.exit(2)
+        wait_for_ollama()
+        have = installed()
+        log(f"Listed: {', '.join(wanted)}")
+        log(f"Installed before: {', '.join(sorted(have)) or '(none)'}")
+
+        failed = []
+        for model in wanted:
+            if SKIP_EXISTING and model in have:
+                log(f"SKIP  {model} (already installed; set SKIP_EXISTING=false to re-pull)")
+                continue
+            log(f"PULL  {model}")
+            if pull(model):
+                log(f"OK    {model}")
+            else:
+                failed.append(model)
+
+        if PRUNE and failed:
+            log("PRUNE skipped: at least one pull failed, fix the list first")
+        elif PRUNE:
+            for name in sorted(set(installed()) - set(wanted)):
+                try:
+                    with request("DELETE", "/api/delete", {"model": name}):
+                        log(f"PRUNED {name}")
+                except urllib.error.HTTPError as exc:
+                    log(f"PRUNE FAILED {name}: HTTP {exc.code}")
+
+        have = installed()
+        print("\n=== Installed models (GET /api/tags + POST /api/show) ===", flush=True)
+        for name in sorted(have):
+            mark = "listed" if name in wanted else "NOT LISTED"
+            size_gb = have[name].get("size", 0) / 1e9
+            print(f"  {name:<28} {size_gb:5.2f} GB  {show(name)}  [{mark}]", flush=True)
+        total = sum(m.get("size", 0) for m in have.values()) / 1e9
+        print(f"  total on disk: {total:.2f} GB", flush=True)
+
+        missing = [m for m in wanted if m not in have]
+        if failed or missing:
+            print(f"\nRESULT: FAILED  failed={failed} missing={missing}", flush=True)
+            sys.exit(1)
+        print(f"\nRESULT: ALL {len(wanted)} LISTED MODELS PRESENT", flush=True)
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ollama-pull
+  namespace: si-lab
+  labels:
+    app: ollama-pull
+spec:
+  backoffLimit: 1               # Ollama resumes partial downloads, so one retry is cheap
+  activeDeadlineSeconds: 5400   # 90 min ceiling for ~6 GB of new models on a home connection
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ollama-pull
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pull
+          image: python:3.12-slim
+          command: ["python", "/app/pull.py"]
+          env:
+            - name: OLLAMA_URL
+              value: "http://ollama.si-lab.svc.cluster.local:11434"
+            - name: MODELS_FILE
+              value: /config/models.txt
+            - name: SKIP_EXISTING
+              value: "true"
+            - name: PRUNE
+              value: "false"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: models-list
+              mountPath: /config
+              readOnly: true
+            - name: script
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: models-list
+          configMap:
+            name: ollama-models
+        - name: script
+          configMap:
+            name: ollama-pull-script

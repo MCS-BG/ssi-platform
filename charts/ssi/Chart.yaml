@@ -1,0 +1,13 @@
+apiVersion: v2
+name: ssi
+description: Sovereign Super Intelligence (SSI) control plane on Kubernetes — gateway, control-layer, business MCP, engineering MCP, productivity (M365) MCP
+type: application
+version: 0.1.0
+appVersion: "day-16"
+keywords:
+  - ssi
+  - sovereign-super-intelligence
+  - mcp
+  - control-layer
+maintainers:
+  - name: ssi-platform

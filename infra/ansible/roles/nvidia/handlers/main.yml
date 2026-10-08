@@ -1,0 +1,10 @@
+- name: Reboot required for the NVIDIA driver
+  ansible.builtin.debug:
+    msg: "A new NVIDIA driver was installed. Reboot the lab host, then re-run the playbook."
+
+# k3s detects the NVIDIA runtime only at startup.
+- name: Restart k3s
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: restarted
+  when: k3s_restart_on_change and inventory_hostname in groups['k3s_server']

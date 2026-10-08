@@ -1,0 +1,16 @@
+# Day 7 stage C overlay: traces to Langfuse AND Tempo, logs to Loki.
+# If you skipped Langfuse (8 GB monitoring node, Loki/Tempo instead), delete "otlp_http/langfuse" below.
+#   helm upgrade otel-collector open-telemetry/opentelemetry-collector --version 0.173.1 -n monitoring \
+#     -f ~/ssi-platform/k8s/day-07-otel-collector-values.yaml \
+#     -f ~/ssi-platform/k8s/day-07-otel-collector-stage-c.yaml
+config:
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp_grpc/tempo, otlp_http/langfuse]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp_http/loki]

@@ -1,0 +1,27 @@
+# CI build check for the prompt-guard image: builds apps/prompt-guard/ but does not push to ghcr.io. Runs on pushes to main that change apps/prompt-guard/ or these workflow files.
+# "Run workflow" on the Actions tab (workflow_dispatch) runs it by hand.
+name: build prompt-guard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/prompt-guard/**"
+      - ".github/workflows/build-prompt-guard.yml"
+      - ".github/workflows/_build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-prompt-guard
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-image.yml
+    with:
+      app: prompt-guard
+    permissions:
+      contents: read

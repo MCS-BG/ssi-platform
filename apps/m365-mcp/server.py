@@ -1,0 +1,553 @@
+"""SSI Microsoft 365 productivity MCP (m365-mcp).
+
+Reads one person's Microsoft 365 data through Microsoft Graph with delegated OAuth:
+the server acts as the signed-in personal Microsoft account, never as an app.
+
+Tools (read-only):
+  m365_whoami           Graph /me: display name, sign-in name, id
+  m365_list_mail        recent messages in a mail folder (default inbox)
+  m365_get_mail         one message by id (headers + body preview)
+  m365_list_events      calendar events in an upcoming window (calendarView)
+  m365_list_onedrive    children of the OneDrive root or of a folder path
+  m365_search_onedrive  OneDrive search by file name / content
+
+Auth (see docs/day-14-m365-mcp.md):
+  - Public client app registered in Microsoft Entra for personal Microsoft accounts.
+  - The operator signs in once with apps/m365-mcp/login.py (device code; Microsoft Authenticator
+    handles MFA). The script writes an MSAL token cache that goes into the Kubernetes
+    Secret m365-mcp-auth. The cache holds the refresh token; it is never in git.
+  - At runtime MSAL refreshes access tokens silently from that cache.
+  - No token, wrong account, or expired sign-in: every tool returns a clear ToolError
+    (fail closed). The process and /healthz stay up so the pod is Ready.
+
+Guardrails (same as apps/mcp-server):
+  - user-supplied string arguments are classified by Prompt Guard before a call;
+    a malicious_score >= PROMPT_GUARD_THRESHOLD refuses the call
+  - mail subjects/previews and the message body preview are classified on the way out;
+    flagged items are withheld (indirect prompt injection through email)
+  - Prompt Guard unreachable: refused unless PROMPT_GUARD_FAIL_OPEN=true
+
+Transport: MCP Streamable HTTP on :8000 at /mcp (stateless, JSON responses).
+"""
+import datetime as dt
+import functools
+import json
+import os
+import re
+import threading
+from typing import Any
+from urllib.parse import quote
+
+import msal
+import requests
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
+from opentelemetry import trace
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse
+
+from llmtrace import _text, observation, set_output
+
+PORT = int(os.environ.get("PORT", "8000"))
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get(
+    "MCP_ALLOWED_HOSTS",
+    "127.0.0.1:*,localhost:*,m365-mcp:*,m365-mcp.si-lab:*,m365-mcp.si-lab.svc:*,m365-mcp.si-lab.svc.cluster.local:*",
+).split(",") if h.strip()]
+
+# ---- Microsoft identity settings (no secrets here; the token cache comes from a Secret) ----
+AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "").strip()
+# "consumers" = personal Microsoft accounts only. "common" also works for an app that allows both.
+AUTHORITY = os.environ.get("MSAL_AUTHORITY", "https://login.microsoftonline.com/common").rstrip("/")
+TOKEN_CACHE_PATH = os.environ.get("MSAL_TOKEN_CACHE", "/var/run/secrets/m365/token_cache.json")
+REFRESH_TOKEN = os.environ.get("MSAL_REFRESH_TOKEN", "").strip()  # optional alternative to the cache file
+# Only this account may be used. Empty = accept whichever account is in the cache.
+EXPECTED_ACCOUNT = os.environ.get("M365_EXPECTED_ACCOUNT", "").strip().lower()
+GRAPH = os.environ.get("GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0").rstrip("/")
+# Read-only delegated scopes. MSAL adds openid/profile/offline_access itself.
+SCOPES = [s for s in os.environ.get(
+    "M365_SCOPES", "User.Read Mail.Read Calendars.Read Files.Read").split() if s]
+# Windows zone names are the safest choice for Graph; "Central Standard Time" follows DST.
+DEFAULT_TIMEZONE = os.environ.get("M365_TIMEZONE", "Central Standard Time")
+
+PROMPT_GUARD_URL = os.environ.get("PROMPT_GUARD_URL", "http://prompt-guard.si-lab.svc.cluster.local:8080/classify")
+PROMPT_GUARD_THRESHOLD = float(os.environ.get("PROMPT_GUARD_THRESHOLD", "0.5"))
+PROMPT_GUARD_ENABLED = os.environ.get("PROMPT_GUARD_ENABLED", "true").lower() == "true"
+PROMPT_GUARD_FAIL_OPEN = os.environ.get("PROMPT_GUARD_FAIL_OPEN", "false").lower() == "true"
+# Also scan mail content returned to the model (indirect prompt injection).
+PROMPT_GUARD_SCAN_CONTENT = os.environ.get("PROMPT_GUARD_SCAN_CONTENT", "true").lower() == "true"
+
+SIGN_IN_HINT = (
+    "Run the one-time sign-in (apps/m365-mcp/login.py on a trusted machine), then create the "
+    "Kubernetes Secret m365-mcp-auth in si-lab and restart the m365-mcp Deployment. "
+    "See docs/day-14-m365-mcp.md."
+)
+
+mcp = MCPServer(
+    "ssi-m365-mcp",
+    instructions=(
+        "Read-only Microsoft 365 tools for the signed-in personal Microsoft account (SSI productivity slot). "
+        "m365_whoami shows who is signed in. m365_list_mail lists recent messages; pass a message id to "
+        "m365_get_mail for its preview. m365_list_events lists calendar events for the next days. "
+        "m365_list_onedrive and m365_search_onedrive read OneDrive. Nothing here sends, edits or deletes."
+    ),
+    version="0.1.0",
+)
+
+
+# ---------- MSAL: delegated token for the signed-in account ----------
+
+class _Auth:
+    """Holds the MSAL public client and its in-memory token cache.
+
+    The cache is loaded from the Secret file (again whenever the file changes). MSAL
+    rotates refresh tokens as it refreshes; the newest ones stay in memory (the Secret
+    is mounted read-only).
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.app = None
+        self.cache = None
+        self.loaded = False
+        self.load_error = None
+        self.cache_mtime = None
+
+    @staticmethod
+    def _mtime():
+        try:
+            return os.path.getmtime(TOKEN_CACHE_PATH)
+        except OSError:
+            return None
+
+    def _ensure_loaded(self):
+        # Reload when the Secret changes (kubelet swaps the mounted file), so a new
+        # sign-in is picked up without a restart. Otherwise keep the in-memory cache,
+        # which holds the newest refresh token MSAL has rotated in.
+        if not self.loaded or self._mtime() != self.cache_mtime:
+            self._load()
+
+    def _load(self):
+        self.loaded = True
+        self.load_error = None
+        self.app = None
+        self.cache_mtime = self._mtime()
+        if not AZURE_CLIENT_ID:
+            self.load_error = "AZURE_CLIENT_ID is not set (Application (client) ID of the Entra app)."
+            return
+        self.cache = msal.SerializableTokenCache()
+        if os.path.isfile(TOKEN_CACHE_PATH):
+            try:
+                with open(TOKEN_CACHE_PATH, encoding="utf-8") as f:
+                    raw = f.read().strip()
+                if raw:
+                    self.cache.deserialize(raw)
+            except (OSError, ValueError) as e:
+                self.load_error = f"token cache at {TOKEN_CACHE_PATH} is unreadable: {type(e).__name__}"
+                return
+        try:
+            self.app = msal.PublicClientApplication(AZURE_CLIENT_ID, authority=AUTHORITY, token_cache=self.cache)
+        except (ValueError, requests.RequestException) as e:  # authority discovery needs login.microsoftonline.com
+            self.load_error = f"could not reach the Microsoft sign-in service: {type(e).__name__}"
+            self.loaded = False
+
+    def status(self):
+        """Non-secret summary for /readyz and m365_whoami errors."""
+        with self.lock:
+            self._ensure_loaded()
+            accounts = self.app.get_accounts() if self.app else []
+            return {
+                "client_id_set": bool(AZURE_CLIENT_ID),
+                "authority": AUTHORITY,
+                "token_cache_present": os.path.isfile(TOKEN_CACHE_PATH),
+                "refresh_token_env_present": bool(REFRESH_TOKEN),
+                "accounts_in_cache": len(accounts),
+                "load_error": self.load_error,
+            }
+
+    def _pick_account(self):
+        accounts = self.app.get_accounts()
+        if EXPECTED_ACCOUNT:
+            accounts = [a for a in accounts if (a.get("username") or "").lower() == EXPECTED_ACCOUNT]
+        return accounts[0] if accounts else None
+
+    def token(self):
+        with self.lock:
+            self._ensure_loaded()
+            if self.load_error:
+                raise ToolError(f"Microsoft 365 is not configured: {self.load_error} {SIGN_IN_HINT}")
+            result = None
+            account = self._pick_account()
+            if account:
+                result = self.app.acquire_token_silent(SCOPES, account=account)
+            elif self.app.get_accounts() and EXPECTED_ACCOUNT:
+                raise ToolError(
+                    "The stored Microsoft 365 sign-in is for a different account than M365_EXPECTED_ACCOUNT. "
+                    "Refusing to use it. " + SIGN_IN_HINT)
+            if not result and REFRESH_TOKEN:
+                result = self.app.acquire_token_by_refresh_token(REFRESH_TOKEN, scopes=SCOPES)
+                if result and "access_token" in result and EXPECTED_ACCOUNT:
+                    who = ((result.get("id_token_claims") or {}).get("preferred_username") or "").lower()
+                    if who != EXPECTED_ACCOUNT:
+                        raise ToolError("MSAL_REFRESH_TOKEN belongs to a different account than "
+                                        "M365_EXPECTED_ACCOUNT. Refusing to use it.")
+            if not result:
+                raise ToolError("Not signed in to Microsoft 365 (no token in the m365-mcp-auth Secret). "
+                                + SIGN_IN_HINT)
+            if "access_token" not in result:
+                code = result.get("error", "unknown_error")
+                if code in ("invalid_grant", "interaction_required"):
+                    raise ToolError("The Microsoft 365 sign-in has expired or was revoked "
+                                    f"({code}). Sign in again. " + SIGN_IN_HINT)
+                raise ToolError(f"Microsoft sign-in failed: {code}. " + SIGN_IN_HINT)
+            return result["access_token"]
+
+
+AUTH = _Auth()
+
+
+def graph_get(path, params=None, headers=None):
+    """GET a Graph resource as the signed-in user. Raises ToolError on any failure."""
+    token = AUTH.token()
+    url = path if path.startswith("https://") else f"{GRAPH}{path}"
+    h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    h.update(headers or {})
+    with observation("graph GET", "tool", input={"path": path, "params": params},
+                     **{"graph.path": path.split("?")[0][:200]}) as span:
+        try:
+            r = requests.get(url, params=params, headers=h, timeout=20)
+        except requests.RequestException as e:
+            raise ToolError(f"Microsoft Graph unreachable: {type(e).__name__}") from e
+        span.set_attribute("http.status_code", r.status_code)
+        if r.status_code >= 400:
+            try:
+                err = r.json().get("error", {})
+                message = f"{err.get('code', '')}: {err.get('message', '')}"[:300]
+            except ValueError:
+                message = r.text[:300]
+            if r.status_code == 401:
+                raise ToolError("Microsoft Graph rejected the token (401). " + SIGN_IN_HINT)
+            if r.status_code == 403:
+                raise ToolError(f"Microsoft Graph denied access (403, missing consent for a scope?): {message}")
+            raise ToolError(f"Microsoft Graph error {r.status_code}: {message}")
+        body = r.json()
+        set_output(span, {"status": r.status_code, "items": len(body.get("value", [])) if isinstance(body, dict) else None})
+        return body
+
+
+# ---------- Prompt Guard (same contract as apps/mcp-server) ----------
+
+PROMPT_GUARD_MAX_CHARS = 20000
+
+
+def _pieces(text):
+    if len(text) <= PROMPT_GUARD_MAX_CHARS:
+        return [text]
+    step = PROMPT_GUARD_MAX_CHARS - 1000
+    return [text[i:i + PROMPT_GUARD_MAX_CHARS] for i in range(0, len(text), step)]
+
+
+def classify(text, stage, tool):
+    """Classify one text with Prompt Guard. Returns (blocked, score). Fails closed."""
+    with observation(f"prompt-guard {stage}", "guardrail",
+                     input={"tool": tool, "stage": stage, "text": text},
+                     **{"prompt_guard.stage": stage, "prompt_guard.tool": tool,
+                        "prompt_guard.threshold": PROMPT_GUARD_THRESHOLD}) as span:
+        try:
+            result = None
+            for piece in _pieces(text):
+                r = requests.post(PROMPT_GUARD_URL, json={"text": piece, "threshold": PROMPT_GUARD_THRESHOLD},
+                                  timeout=15)
+                r.raise_for_status()
+                part = r.json()
+                if result is None or float(part["malicious_score"]) > float(result["malicious_score"]):
+                    result = part
+            score = float(result["malicious_score"])
+        except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+            span.set_attribute("prompt_guard.error", f"{type(e).__name__}: {e}")
+            span.set_attribute("langfuse.observation.level", "ERROR")
+            if PROMPT_GUARD_FAIL_OPEN:
+                set_output(span, {"error": str(e), "action": "allowed (fail open)"})
+                return False, None
+            set_output(span, {"error": str(e), "action": "refused (fail closed)"})
+            raise ToolError(f"Prompt Guard unavailable, request refused: {type(e).__name__}") from e
+        blocked = score >= PROMPT_GUARD_THRESHOLD
+        span.set_attribute("prompt_guard.malicious_score", score)
+        span.set_attribute("prompt_guard.blocked", blocked)
+        if blocked:
+            span.set_attribute("langfuse.observation.level", "WARNING")
+        set_output(span, {**result, "threshold": PROMPT_GUARD_THRESHOLD, "blocked": blocked})
+        return blocked, score
+
+
+def guard_input(tool, **arguments):
+    """Refuse the tool call if its user-supplied text looks like a prompt attack."""
+    if not PROMPT_GUARD_ENABLED:
+        return
+    text = "\n".join(str(v) for v in arguments.values() if isinstance(v, str) and v.strip())
+    if not text:
+        return
+    blocked, score = classify(text, "input", tool)
+    if blocked:
+        raise ToolError(
+            f"Refused by Prompt Guard: the {tool} arguments look like a prompt injection or jailbreak "
+            f"(malicious_score {score:.3f} >= threshold {PROMPT_GUARD_THRESHOLD})."
+        )
+
+
+def guard_content(tool, text):
+    """Return (withheld, score) for content read from Microsoft 365 (indirect injection)."""
+    if not (PROMPT_GUARD_ENABLED and PROMPT_GUARD_SCAN_CONTENT) or not (text or "").strip():
+        return False, None
+    return classify(text, "retrieved_content", tool)
+
+
+def traced_tool(func):
+    """Add the tool's arguments and result to the SDK's tools/call span (as in mcp-server)."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        span = trace.get_current_span()
+        span.set_attribute("langfuse.observation.input", _text(kwargs))
+        span.set_attribute("langfuse.trace.name", f"mcp {func.__name__}")
+        result = func(*args, **kwargs)
+        set_output(span, result)
+        return result
+    return wrapper
+
+
+# ---------- input checks ----------
+
+_GRAPH_ID = re.compile(r"[A-Za-z0-9_\-=+/]{1,512}")
+_FOLDER = re.compile(r"[A-Za-z][A-Za-z0-9]{0,63}")
+
+
+def _clamp(value, low, high):
+    return max(low, min(int(value), high))
+
+
+def _withheld_note(score):
+    return f"[withheld by Prompt Guard: malicious_score {score:.3f} >= threshold {PROMPT_GUARD_THRESHOLD}]"
+
+
+def _sender(msg):
+    addr = ((msg.get("from") or {}).get("emailAddress") or {})
+    return {"name": addr.get("name"), "address": addr.get("address")}
+
+
+def _drive_item(item):
+    return {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "type": "folder" if "folder" in item else "file",
+        "size": item.get("size"),
+        "child_count": (item.get("folder") or {}).get("childCount"),
+        "modified": item.get("lastModifiedDateTime"),
+        "path": ((item.get("parentReference") or {}).get("path") or "").replace("/drive/root:", "") or "/",
+        "web_url": item.get("webUrl"),
+    }
+
+
+# ---------- tools ----------
+
+@mcp.tool()
+@traced_tool
+def m365_whoami() -> dict[str, Any]:
+    """Show which Microsoft 365 account this server is signed in as (Graph /me)."""
+    me = graph_get("/me", params={"$select": "id,displayName,mail,userPrincipalName"})
+    return {
+        "source": "microsoft-graph",
+        "display_name": me.get("displayName"),
+        "mail": me.get("mail") or me.get("userPrincipalName"),
+        "user_principal_name": me.get("userPrincipalName"),
+        "id": me.get("id"),
+    }
+
+
+@mcp.tool()
+@traced_tool
+def m365_list_mail(top: int = 10, folder: str = "inbox", unread_only: bool = False) -> dict[str, Any]:
+    """List the most recent mail messages (newest first): id, subject, sender, received time, preview.
+
+    top: 1 to 25. folder: a well-known folder name such as inbox, sentitems, drafts, archive.
+    unread_only: true to list only unread messages. Pass an id to m365_get_mail for more.
+    """
+    if not _FOLDER.fullmatch(folder or ""):
+        raise ToolError("folder must be a well-known folder name such as inbox or sentitems")
+    guard_input("m365_list_mail", folder=folder)
+    params = {
+        "$top": str(_clamp(top, 1, 25)),
+        "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments",
+        "$orderby": "receivedDateTime desc",
+    }
+    if unread_only:
+        # Graph needs the $orderby property to lead the $filter when both are used.
+        params["$filter"] = "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+    body = graph_get(f"/me/mailFolders/{quote(folder)}/messages", params=params)
+    messages, withheld = [], 0
+    for m in body.get("value", []):
+        item = {
+            "id": m.get("id"),
+            "subject": m.get("subject"),
+            "from": _sender(m),
+            "received": m.get("receivedDateTime"),
+            "is_read": m.get("isRead"),
+            "has_attachments": m.get("hasAttachments"),
+            "preview": (m.get("bodyPreview") or "")[:300],
+        }
+        blocked, score = guard_content("m365_list_mail", f"{item['subject'] or ''}\n{item['preview']}")
+        if blocked:
+            withheld += 1
+            item["subject"] = item["preview"] = _withheld_note(score)
+            item["withheld"] = True
+        messages.append(item)
+    return {"source": "microsoft-graph", "folder": folder, "returned": len(messages),
+            "withheld": withheld, "messages": messages}
+
+
+@mcp.tool()
+@traced_tool
+def m365_get_mail(message_id: str) -> dict[str, Any]:
+    """Read one mail message by id (from m365_list_mail): headers and body preview (no attachments)."""
+    if not _GRAPH_ID.fullmatch(message_id or ""):
+        raise ToolError("message_id must be a Graph message id from m365_list_mail")
+    guard_input("m365_get_mail", message_id=message_id)
+    m = graph_get(f"/me/messages/{quote(message_id, safe='')}", params={
+        "$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,isRead,"
+                   "hasAttachments,importance,webLink,conversationId",
+    })
+    out = {
+        "source": "microsoft-graph",
+        "id": m.get("id"),
+        "subject": m.get("subject"),
+        "from": _sender(m),
+        "to": [(r.get("emailAddress") or {}).get("address") for r in m.get("toRecipients") or []],
+        "cc": [(r.get("emailAddress") or {}).get("address") for r in m.get("ccRecipients") or []],
+        "received": m.get("receivedDateTime"),
+        "is_read": m.get("isRead"),
+        "importance": m.get("importance"),
+        "has_attachments": m.get("hasAttachments"),
+        "body_preview": m.get("bodyPreview"),
+        "web_link": m.get("webLink"),
+    }
+    blocked, score = guard_content("m365_get_mail", f"{out['subject'] or ''}\n{out['body_preview'] or ''}")
+    if blocked:
+        out["subject"] = out["body_preview"] = _withheld_note(score)
+        out["withheld"] = True
+    return out
+
+
+@mcp.tool()
+@traced_tool
+def m365_list_events(days: int = 7, top: int = 20, timezone: str | None = None) -> dict[str, Any]:
+    """List calendar events from now through the next `days` days (1 to 31), soonest first.
+
+    top: 1 to 50. timezone: IANA or Windows time zone name for the start/end times
+    (default from M365_TIMEZONE).
+    """
+    tz = timezone or DEFAULT_TIMEZONE
+    if not re.fullmatch(r"[A-Za-z0-9_+\-/ ]{1,64}", tz):
+        raise ToolError("timezone must be a time zone name such as Central Standard Time or UTC")
+    guard_input("m365_list_events", timezone=timezone)
+    start = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    end = start + dt.timedelta(days=_clamp(days, 1, 31))
+    body = graph_get("/me/calendarView", params={
+        "startDateTime": start.isoformat().replace("+00:00", "Z"),
+        "endDateTime": end.isoformat().replace("+00:00", "Z"),
+        "$top": str(_clamp(top, 1, 50)),
+        "$orderby": "start/dateTime",
+        "$select": "id,subject,start,end,location,organizer,isAllDay,isCancelled,showAs,webLink",
+    }, headers={"Prefer": f'outlook.timezone="{tz}"'})
+    events = []
+    for e in body.get("value", []):
+        events.append({
+            "id": e.get("id"),
+            "subject": e.get("subject"),
+            "start": (e.get("start") or {}).get("dateTime"),
+            "end": (e.get("end") or {}).get("dateTime"),
+            "time_zone": (e.get("start") or {}).get("timeZone"),
+            "all_day": e.get("isAllDay"),
+            "cancelled": e.get("isCancelled"),
+            "location": (e.get("location") or {}).get("displayName"),
+            "organizer": ((e.get("organizer") or {}).get("emailAddress") or {}).get("address"),
+            "show_as": e.get("showAs"),
+        })
+    return {"source": "microsoft-graph", "window_start": start.isoformat(), "window_end": end.isoformat(),
+            "returned": len(events), "events": events}
+
+
+def _clean_path(path):
+    path = (path or "").strip().strip("/")
+    if not path:
+        return ""
+    parts = path.split("/")
+    if any(p in ("", ".", "..") for p in parts) or len(path) > 400 or any(c in path for c in ":*?\"<>|\\"):
+        raise ToolError("path must be a plain OneDrive folder path such as Documents/Taxes")
+    return "/".join(quote(p, safe="") for p in parts)
+
+
+@mcp.tool()
+@traced_tool
+def m365_list_onedrive(path: str = "", top: int = 50) -> dict[str, Any]:
+    """List the files and folders in OneDrive: the root when path is empty, else that folder.
+
+    path: folder path from the OneDrive root, e.g. "Documents" or "Documents/Taxes". top: 1 to 200.
+    """
+    cleaned = _clean_path(path)
+    guard_input("m365_list_onedrive", path=path)
+    url = f"/me/drive/root:/{cleaned}:/children" if cleaned else "/me/drive/root/children"
+    body = graph_get(url, params={
+        "$top": str(_clamp(top, 1, 200)),
+        "$select": "id,name,size,folder,file,lastModifiedDateTime,parentReference,webUrl",
+    })
+    items = [_drive_item(i) for i in body.get("value", [])]
+    return {"source": "microsoft-graph", "path": "/" + (path or "").strip("/"), "returned": len(items),
+            "more": "@odata.nextLink" in body, "items": items}
+
+
+@mcp.tool()
+@traced_tool
+def m365_search_onedrive(query: str, top: int = 25) -> dict[str, Any]:
+    """Search OneDrive file and folder names and content. top: 1 to 50."""
+    if not (query or "").strip():
+        raise ToolError("query must not be empty")
+    if len(query) > 200:
+        raise ToolError("query must be at most 200 characters")
+    guard_input("m365_search_onedrive", query=query)
+    q = query.replace("'", "''")
+    body = graph_get(f"/me/drive/root/search(q='{quote(q, safe='')}')", params={
+        "$top": str(_clamp(top, 1, 50)),
+        "$select": "id,name,size,folder,file,lastModifiedDateTime,parentReference,webUrl",
+    })
+    items = [_drive_item(i) for i in body.get("value", [])][:_clamp(top, 1, 50)]
+    return {"source": "microsoft-graph", "query": query, "returned": len(items), "items": items}
+
+
+# ---------- health ----------
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def healthz(request: Request) -> PlainTextResponse:
+    # Liveness/readiness: the process is up. Sign-in state is reported by /authz, not here,
+    # so the pod stays Ready before the one-time sign-in (tools fail closed meanwhile).
+    return PlainTextResponse("ok\n")
+
+
+@mcp.custom_route("/authz", methods=["GET"])
+async def authz(request: Request) -> JSONResponse:
+    """Non-secret sign-in status: whether a client id and token cache are present. No tokens."""
+    return JSONResponse(AUTH.status())
+
+
+if __name__ == "__main__":
+    mcp.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=PORT,
+        streamable_http_path="/mcp",
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=ALLOWED_HOSTS,
+            allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+        ),
+    )

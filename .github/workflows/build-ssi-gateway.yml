@@ -1,0 +1,28 @@
+# CI build check for the ssi-gateway image: builds apps/ssi-gateway/ but does not push to ghcr.io. Runs on pushes to main that change apps/ssi-gateway/ or these workflow files.
+# Needed only for ssi_control_plane_mode = "helm"; the lab and the default cloud
+# envs run the code from ConfigMaps.
+name: build ssi-gateway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/ssi-gateway/**"
+      - ".github/workflows/build-ssi-gateway.yml"
+      - ".github/workflows/_build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ssi-gateway
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-image.yml
+    with:
+      app: ssi-gateway
+    permissions:
+      contents: read

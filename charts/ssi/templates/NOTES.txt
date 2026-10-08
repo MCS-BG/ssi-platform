@@ -1,0 +1,23 @@
+SSI chart ({{ .Chart.Version }}) installed into namespace {{ include "ssi.namespace" . }}.
+
+Before traffic works:
+  1. Create Secret {{ .Values.gateway.authSecretName }} (key {{ .Values.gateway.authSecretKey }}) — never commit the token.
+  2. Ensure prompt-guard is Running in the same namespace (unchanged from Day 7/8; fail-closed).
+  3. Point the model slot (Ollama GPU pool or Azure OpenAI) via controlLayer values.
+
+Smoke:
+  curl -sS http://ssi-gateway:8080/healthz
+  curl -sS -H "Authorization: Bearer <token>" http://ssi-gateway:8080/control/healthz
+
+Enterprise base URL for SSI Connector:
+  Private Link / VPN / internal DNS hostname
+  {{- if .Values.privateEndpointHostname }}
+  configured hint: {{ .Values.privateEndpointHostname }}
+  {{- else }}
+  (set values.privateEndpointHostname when known)
+  {{- end }}
+
+Quiet observability: Grafana + Langfuse remain the obs lane (or Azure Monitor + Langfuse).
+MCP slots (business / engineering / productivity) do not peer — cross-share only via control-layer loop state.
+Conversation memory (memory.enabled={{ .Values.memory.enabled }}): POST /control/ask with a conversation_id; GET or DELETE /control/conversations/<id>.
+The home-lab VPN path is lab-only; not part of the product/enterprise story.

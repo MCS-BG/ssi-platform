@@ -1,0 +1,14 @@
+# Day 8b: namespace for the Tailscale Kubernetes operator and its ingress proxy pods.
+# Created before "helm upgrade --install ... --create-namespace" so it gets explicit Pod Security labels,
+# like the Day 7 namespaces. The operator's proxy pods run a privileged init container that sets
+# net.ipv4.ip_forward, so this namespace is "privileged" (the same level as monitoring-host on Day 7).
+# Docs: https://tailscale.com/docs/kubernetes-operator/install-operator
+# Apply:
+#   kubectl apply -f ~/ssi-platform/k8s/day-08b-tailscale-namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tailscale
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest

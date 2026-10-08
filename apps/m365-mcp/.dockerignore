@@ -1,0 +1,7 @@
+# Only the files the Dockerfile copies go into the build context.
+*
+!requirements.txt
+!*.py
+!README.md
+__pycache__/
+*.pyc

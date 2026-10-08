@@ -1,0 +1,166 @@
+# Day 8a: prompt-guard on its own image (ghcr.io/<owner>/prompt-guard), built by GitHub Actions.
+# Replaces the Deployment from day-07-prompt-guard.yaml:
+# - no deps init container: torch (CPU), transformers and FastAPI are in the image
+# - server.py and download.py are in the image (/app), so the prompt-guard-code ConfigMap is unused
+# - the model stays on the prompt-guard-cache PVC. It is gated on Hugging Face and the image is
+#   public, so it is never baked into the image. The model init container (same image) skips the
+#   download when the model is already cached, which it is since Day 7.
+# - LEGACY_DEPS_DIR makes the init container delete the Day 7 pip folder (/cache/deps-v1, ~1.2 GB).
+#   Remove that env entry if you want to keep it for a rollback to day-07-prompt-guard.yaml
+#   (a rollback without it just reinstalls the packages on first start).
+# The PVC, Service and NetworkPolicy from day-07-prompt-guard.yaml are unchanged.
+# The image lines are pinned to a commit SHA by scripts/pin-images.sh (Day 8a step 7).
+# Apply:
+#   kubectl apply -f ~/ssi-platform/k8s/day-08a-prompt-guard.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prompt-guard
+  namespace: si-lab
+  labels:
+    app: prompt-guard
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prompt-guard
+  template:
+    metadata:
+      labels:
+        app: prompt-guard
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: gpu-node
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: model
+          image: ghcr.io/mcs-bg/prompt-guard:6dfc885
+          command: ["python", "/app/download.py"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HF_HOME
+              value: /cache/hf
+            - name: MODEL_ID
+              value: meta-llama/Llama-Prompt-Guard-2-22M
+            - name: MODEL_DIR
+              value: /cache/models/Llama-Prompt-Guard-2-22M
+            - name: LEGACY_DEPS_DIR
+              value: /cache/deps-v1
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: prompt-guard
+          image: ghcr.io/mcs-bg/prompt-guard:6dfc885
+          command:
+            - python
+            - -m
+            - uvicorn
+            - server:app
+            - --app-dir
+            - /app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --no-access-log
+          env:
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HF_HOME
+              value: /cache/hf
+            - name: MODEL_ID
+              value: meta-llama/Llama-Prompt-Guard-2-22M
+            - name: MODEL_DIR
+              value: /cache/models/Llama-Prompt-Guard-2-22M
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            - name: OMP_NUM_THREADS
+              value: "2"
+            - name: TORCH_THREADS
+              value: "2"
+            - name: THRESHOLD
+              value: "0.5"
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 30
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: prompt-guard-cache
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

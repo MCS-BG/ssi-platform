@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars (git-ignored). No secrets here (secrets.auto.tfvars).
+# GCP credentials: gcloud auth application-default login.
+
+project_id        = "<your-project-id>"
+region            = "us-central1"
+zone              = "us-central1-a"
+name              = "ssi"
+node_machine_type = "e2-standard-8"
+node_count        = 2
+
+# GPU pool for the model server. OFF by default (quota + cost).
+enable_gpu_pool      = false
+gpu_machine_type     = "a3-highgpu-8g"
+gpu_accelerator_type = "nvidia-h100-80gb"
+gpu_node_count       = 1
+gpus_per_node        = 8
+
+# App layer
+model_backend          = "ollama"
+ssi_control_plane_mode = "manifests"
+image_registry         = "ghcr.io/mcs-bg"
+enable_observability   = false
+gateway_internal_lb    = true
+gateway_allowed_cidrs  = ["10.50.0.0/20"]

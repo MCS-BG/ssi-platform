@@ -1,0 +1,113 @@
+# Day 8a: mcp-server on its own image (ghcr.io/<owner>/mcp-server), built by GitHub Actions.
+# Replaces the Day 6 Deployment and the Day 7 OTel patch in one file:
+# - no deps init container: mcp, psycopg, requests and the OpenTelemetry packages are in the image
+# - server.py is in the image (/app), so the mcp-server-code ConfigMap is no longer mounted
+# - still starts through opentelemetry-instrument with the same OTEL_* settings as Day 7
+# - search_notes sends keep_alive "-1m" on its /api/embed call (embedding model only)
+# The Service and NetworkPolicies from day-06-mcp.yaml are unchanged.
+# Do not re-apply day-06-mcp.yaml afterwards: it would switch mcp-server back to the old start-up.
+# The image line is pinned to a commit SHA by scripts/pin-images.sh (Day 8a step 7).
+# Apply:
+#   kubectl apply -f ~/ssi-platform/k8s/day-08a-mcp-server.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: si-lab
+  labels:
+    app: mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-server
+          image: ghcr.io/mcs-bg/mcp-server:5144638
+          command: ["opentelemetry-instrument", "python", "/app/server.py"]
+          env:
+            - name: PORT
+              value: "8000"
+            - name: OLLAMA_URL
+              value: http://ollama.si-lab.svc.cluster.local:11434
+            - name: PG_DSN
+              value: host=pgvector.si-lab.svc.cluster.local port=5432 dbname=rag user=rag
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pgvector-auth
+                  key: POSTGRES_PASSWORD
+            - name: FO_BASE_URL
+              value: http://fo-mock.si-lab.svc.cluster.local:8080
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: EMBED_KEEP_ALIVE
+              value: "-1m"
+            - name: OTEL_SERVICE_NAME
+              value: mcp-server
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=si-lab,deployment.environment.name=homelab
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.monitoring.svc.cluster.local:4318
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: http/protobuf
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: otlp
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: healthz
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_always_on
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

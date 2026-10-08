@@ -1,0 +1,17 @@
+{
+  "_comment": "SSI (Sovereign Super Intelligence) — remote MCP gateways for Cursor. Replace ssi.corp.example with your company's private SSI endpoint (Private Link / VPN). Replace <SSI_TOKEN> with your token; do not commit a real token. Generate this with the SSI Connector: SSI: Copy MCP Config.",
+  "mcpServers": {
+    "ssi-business": {
+      "url": "https://ssi.corp.example/mcp/business",
+      "headers": {
+        "Authorization": "Bearer <SSI_TOKEN>"
+      }
+    },
+    "ssi-engineering": {
+      "url": "https://ssi.corp.example/mcp/engineering",
+      "headers": {
+        "Authorization": "Bearer <SSI_TOKEN>"
+      }
+    }
+  }
+}

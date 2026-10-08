@@ -1,0 +1,17 @@
+# Day 13: the two namespaces created by hand on Day 2 (kubectl create namespace),
+# written down so OpenTofu can adopt them. Same labels as the live lab.
+# si-lab: workloads, Pod Security "baseline" (no privileged pods, no hostPath).
+# gpu-system: NVIDIA device plugin, which legitimately needs host access, so no
+# Pod Security label here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: si-lab
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-system

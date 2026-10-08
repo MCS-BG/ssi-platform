@@ -1,0 +1,19 @@
+# Day 7 (stage B prerequisite): ClickHouse operator. Langfuse chart v2 creates
+# ClickHouseCluster + KeeperCluster custom resources that this operator reconciles.
+# Pinned to the version in the langfuse-k8s README. Install after cert-manager is Ready:
+#   helm upgrade -i clickhouse-operator oci://ghcr.io/clickhouse/clickhouse-operator-helm --version 0.0.5 \
+#     -n clickhouse-operator -f ~/ssi-platform/k8s/day-07-clickhouse-operator-values.yaml
+manager:
+  nodeSelector:
+    ailab/role: observability
+  tolerations:
+    - key: ailab/role
+      operator: Equal
+      value: observability
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 192Mi

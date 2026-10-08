@@ -1,0 +1,141 @@
+# Day 7: ingress NetworkPolicies for the observability stack (k3s embedded kube-router enforces them).
+# Same approach as Day 6: ingress-only, pod-targeted. Nothing here selects cert-manager, the
+# ClickHouse operator, the Prometheus operator or their webhooks, so the API server can still
+# reach them. kubectl port-forward (Grafana, Langfuse UI) is not affected by NetworkPolicy.
+# Apply stage by stage; policies for components you have not installed yet are harmless.
+#   kubectl apply -f ~/ssi-platform/k8s/day-07-netpol.yaml
+---
+# OTLP gateway: apps in si-lab and anything in monitoring may send OTLP; only monitoring may scrape 8888.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-collector-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: si-lab
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: langfuse
+      ports:
+        - port: 4317
+          protocol: TCP
+        - port: 4318
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8888
+          protocol: TCP
+---
+# Loki: the collector and Grafana (monitoring) and the optional log agent (monitoring-host) talk to it; the pod may talk to itself
+# (memberlist / gRPC) through its own Services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring-host
+      ports:
+        - port: 3100
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+              app.kubernetes.io/instance: loki
+---
+# Tempo: 3200 for Grafana queries, 4317/4318 for the collector, all from inside monitoring.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tempo-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+      app.kubernetes.io/instance: tempo
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 3200
+          protocol: TCP
+        - port: 4317
+          protocol: TCP
+        - port: 4318
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tempo
+              app.kubernetes.io/instance: tempo
+---
+# Langfuse namespace: every pod accepts traffic from its own namespace (web, worker, Postgres,
+# Valkey, SeaweedFS, ClickHouse, Keeper, the bucket hook Job) and from the ClickHouse operator.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: langfuse-same-namespace
+  namespace: langfuse
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: clickhouse-operator
+---
+# Langfuse web (UI + public API + /api/public/otel): reachable from the collector (monitoring)
+# and, for the Day 8 SDK path, from si-lab.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: langfuse-web-ingress
+  namespace: langfuse
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: langfuse
+      app.kubernetes.io/instance: langfuse
+      app: web
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: si-lab
+      ports:
+        - port: 3000
+          protocol: TCP

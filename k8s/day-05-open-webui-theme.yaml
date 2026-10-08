@@ -1,0 +1,117 @@
+# Reuse the Open WebUI welcome-screen background on /auth and the chat view (Open WebUI v0.11.4).
+# Mounted over /app/build/static/custom.css because the app re-copies its static folder on every start.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open-webui-theme
+  namespace: si-lab
+data:
+  custom.css: |
+    :root {
+      --welcome-bg: url("/assets/welcome.webp");
+    }
+    /* sign-in / sign-up page */
+    #auth-page {
+      background: var(--welcome-bg) center / cover no-repeat;
+    }
+    #auth-page > div:first-child {
+      background:
+        linear-gradient(to top, rgb(0 0 0 / 0.8), rgb(0 0 0 / 0.2), transparent),
+        linear-gradient(to right, rgb(0 0 0 / 0.5), rgb(0 0 0 / 0.1), transparent) !important;
+    }
+    #auth-container {
+      color: #fff !important;
+    }
+    /* frosted panel behind the form (delete this block if unwanted) */
+    #auth-login-card {
+      background: rgb(0 0 0 / 0.35);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      border-radius: 1.5rem;
+      padding: 2rem 2rem 2.5rem;
+    }
+    /* chat screen, Dark and OLED Dark themes only */
+    html.dark #chat-container {
+      background:
+        linear-gradient(rgb(0 0 0 / 0.55), rgb(0 0 0 / 0.55)),
+        var(--welcome-bg) center / cover no-repeat;
+    }
+    html.dark #navbar-bg-gradient-to-b {
+      background: linear-gradient(to bottom, rgb(0 0 0 / 0.6), transparent) !important;
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: si-lab
+  labels:
+    app: open-webui
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui:v0.11.4
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.si-lab.svc.cluster.local:11434"
+            - name: RAG_EMBEDDING_ENGINE
+              value: "ollama"
+            - name: RAG_EMBEDDING_MODEL
+              value: "nomic-embed-text"
+            - name: ANONYMIZED_TELEMETRY
+              value: "false"
+            - name: DO_NOT_TRACK
+              value: "true"
+            - name: SCARF_NO_ANALYTICS
+              value: "true"
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-webui-secret
+                  key: WEBUI_SECRET_KEY
+          securityContext:
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+            - name: theme
+              mountPath: /app/build/static/custom.css
+              subPath: custom.css
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: open-webui-data
+        - name: theme
+          configMap:
+            name: open-webui-theme

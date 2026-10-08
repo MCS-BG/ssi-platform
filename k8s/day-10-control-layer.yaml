@@ -1,0 +1,616 @@
+# Day 10: control layer in si-lab. Calls Prompt Guard, business mcp-server,
+# engineering-mcp, and Ollama (llama3.2:3b). Budgets: MAX_TOOL_CALLS=4, MAX_TOKENS=512.
+# Day 14: also the productivity slot m365-mcp (M365_MCP_URL / M365_MCP_HOST).
+# Stdlib server from apps/control-layer/server.py via ConfigMap + python:3.12-slim.
+# BUSINESS_MCP_URL / ENGINEERING_MCP_URL use short Service DNS (search domain
+# si-lab.svc.cluster.local) so the Host header matches mcp-server allowlist.
+# Apply after engineering-mcp:
+#   kubectl apply -f ~/ssi-platform/k8s/day-10-control-layer.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: control-layer-code
+  namespace: si-lab
+  labels:
+    app: control-layer
+data:
+  server.py: |
+    """Day 10 control layer: guarded agent loop across business + engineering MCP.
+
+    POST /ask   {"question":"..."}  model-assisted loop with budgets
+    POST /demo  runs the Andreas two-hop sample (engineering PR + business customer)
+    GET  /healthz
+
+    Stdlib only. Calls Prompt Guard (fail closed), mcp-server, engineering-mcp, Ollama.
+    Day 14 adds the productivity slot: m365-mcp (Microsoft 365 via Graph, read-only,
+    signed in as one personal Microsoft account). M365_MCP_URL points at it.
+    """
+    from __future__ import annotations
+
+    import json
+    import os
+    import re
+    import urllib.error
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from typing import Any
+    from urllib.parse import urlsplit
+
+    PORT = int(os.environ.get("PORT", "8080"))
+    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama.si-lab.svc.cluster.local:11434").rstrip("/")
+    MODEL = os.environ.get("MODEL", "llama3.2:3b")
+    PROMPT_GUARD_URL = os.environ.get(
+        "PROMPT_GUARD_URL", "http://prompt-guard.si-lab.svc.cluster.local:8080/classify"
+    )
+    BUSINESS_MCP_URL = os.environ.get(
+        "BUSINESS_MCP_URL", "http://mcp-server:8000/mcp"
+    )
+    ENGINEERING_MCP_URL = os.environ.get(
+        "ENGINEERING_MCP_URL", "http://engineering-mcp:8000/mcp"
+    )
+    # Day 14 productivity slot (Microsoft 365 / Graph). The Host header must be in
+    # m365-mcp's MCP_ALLOWED_HOSTS; the short Service name is on its default list.
+    M365_MCP_URL = os.environ.get(
+        "M365_MCP_URL", "http://m365-mcp.si-lab.svc.cluster.local:8000/mcp"
+    )
+    M365_MCP_HOST = os.environ.get("M365_MCP_HOST", "m365-mcp:8000")
+    MAX_TOOL_CALLS = int(os.environ.get("MAX_TOOL_CALLS", "4"))
+    MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "512"))
+    HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "60"))
+
+    # Short catalog so llama3.2:3b stays within the 4 GB card budget.
+    TOOL_CATALOG = """Tools (slot.name):
+    - engineering.list_prs args: repo?, state?
+    - engineering.list_issues args: repo?, state?
+    - engineering.get_issue args: repo, number
+    - engineering.list_repos args: none
+    - business.fo_query args: entity, filter?, select?, top?
+    - business.fo_list_entities args: none
+    - business.search_notes args: query, k?
+    - productivity.m365_whoami args: none
+    - productivity.m365_list_mail args: top?, folder?, unread_only?
+    - productivity.m365_get_mail args: message_id
+    - productivity.m365_list_events args: days?, top?
+    - productivity.m365_list_onedrive args: path?
+    - productivity.m365_search_onedrive args: query
+    Reply with ONE line only:
+    TOOL slot.name {"arg":"value"}
+    or
+    FINAL your short answer
+    """
+
+
+    def http_json(
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+        accept: str | None = None,
+        host: str | None = None,
+    ) -> Any:
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": accept or "application/json"}
+        if host:
+            headers["Host"] = host
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                body = resp.read()
+                if not body:
+                    return None
+                ctype = resp.headers.get("Content-Type", "")
+                if "json" in ctype or body[:1] in (b"{", b"["):
+                    return json.loads(body.decode("utf-8"))
+                return body.decode("utf-8")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"HTTP {e.code} from {url}: {detail}") from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"unreachable {url}: {e.reason}") from e
+
+
+    def classify(text: str) -> dict[str, Any]:
+        """Fail closed: any Guard error stops the loop."""
+        try:
+            result = http_json("POST", PROMPT_GUARD_URL, {"text": text})
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"Prompt Guard unavailable, request refused: {e}") from e
+        if not isinstance(result, dict) or "label" not in result:
+            raise RuntimeError("Prompt Guard unavailable, request refused: bad response")
+        if result.get("label") == "malicious":
+            raise RuntimeError(
+                f"Refused by Prompt Guard: malicious_score={result.get('malicious_score')}"
+            )
+        return result
+
+
+    def mcp_call(url: str, name: str, arguments: dict[str, Any] | None = None, host: str | None = None) -> dict[str, Any]:
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        }
+        raw = http_json(
+            "POST",
+            url,
+            body,
+            accept="application/json, text/event-stream",
+            host=host,
+        )
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"MCP bad response from {url}")
+        if "error" in raw:
+            raise RuntimeError(f"MCP error: {raw['error']}")
+        result = raw.get("result") or {}
+        if result.get("isError"):
+            text = " ".join(
+                c.get("text", "") for c in result.get("content", []) if isinstance(c, dict)
+            )
+            raise RuntimeError(f"tool error: {text}")
+        if "structuredContent" in result and result["structuredContent"] is not None:
+            return result["structuredContent"]
+        content = result.get("content") or []
+        if content and isinstance(content[0], dict) and "text" in content[0]:
+            try:
+                return json.loads(content[0]["text"])
+            except json.JSONDecodeError:
+                return {"text": content[0]["text"]}
+        return result
+
+
+    def call_tool(slot: str, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        classify(json.dumps({"slot": slot, "tool": name, "arguments": arguments or {}}, sort_keys=True))
+        if slot == "engineering":
+            # Short Host matches TransportSecuritySettings on MCP servers (and works for the sample).
+            return mcp_call(ENGINEERING_MCP_URL, name, arguments, host="engineering-mcp:8000")
+        if slot == "business":
+            return mcp_call(BUSINESS_MCP_URL, name, arguments, host="mcp-server:8000")
+        if slot == "productivity":
+            return mcp_call(M365_MCP_URL, name, arguments, host=M365_MCP_HOST)
+        raise RuntimeError(f"unknown slot: {slot}")
+
+
+    def run_step(step: dict[str, Any]) -> dict[str, Any]:
+        """call_tool, except a productivity tool error (for example "not signed in to
+        Microsoft 365") becomes an error result the answer can explain. Prompt Guard
+        refusals and every other slot still stop the loop (fail closed)."""
+        try:
+            return call_tool(step["slot"], step["name"], step.get("arguments") or {})
+        except RuntimeError as e:
+            if step["slot"] == "productivity" and str(e).startswith("tool error:"):
+                return {"error": str(e)}
+            raise
+
+
+    def ollama_generate(prompt: str, num_predict: int | None = None) -> dict[str, Any]:
+        limit = MAX_TOKENS if num_predict is None else min(num_predict, MAX_TOKENS)
+        payload = {
+            "model": MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.2, "num_predict": limit},
+        }
+        result = http_json("POST", f"{OLLAMA_URL}/api/generate", payload)
+        if not isinstance(result, dict):
+            raise RuntimeError("Ollama bad response")
+        return result
+
+
+    def parse_model_line(text: str) -> tuple[str, Any]:
+        line = (text or "").strip().splitlines()[0].strip() if text else ""
+        if line.upper().startswith("FINAL"):
+            return "final", line[5:].strip(" :")
+        m = re.match(r"TOOL\s+(engineering|business|productivity)\.([A-Za-z0-9_]+)\s+(\{.*\})\s*$", line, re.I)
+        if m:
+            try:
+                args = json.loads(m.group(3))
+            except json.JSONDecodeError:
+                args = {}
+            return "tool", {"slot": m.group(1).lower(), "name": m.group(2), "arguments": args}
+        m2 = re.match(r"TOOL\s+(engineering|business|productivity)\.([A-Za-z0-9_]+)\s*$", line, re.I)
+        if m2:
+            return "tool", {"slot": m2.group(1).lower(), "name": m2.group(2), "arguments": {}}
+        return "final", line or text.strip()
+
+
+    M365_WORDS = {
+        "m365_list_events": r"\b(calendar|meetings?|events?|schedule|appointments?)\b",
+        "m365_list_mail": r"\b(e-?mails?|mail|inbox|outlook|messages)\b",
+        "m365_list_onedrive": r"\b(onedrive|my files|my documents)\b",
+        "m365_whoami": r"\b(m365|microsoft 365|who am i|signed in)\b",
+    }
+    M365_ARGS = {
+        "m365_list_events": {"days": 7, "top": 20},
+        "m365_list_mail": {"top": 10},
+        "m365_list_onedrive": {},
+        "m365_whoami": {},
+    }
+
+
+    def productivity_plan(question: str) -> list[dict[str, Any]]:
+        """Productivity (Microsoft 365) steps for questions about mail, calendar or OneDrive."""
+        q = question.lower()
+        return [
+            {"slot": "productivity", "name": name, "arguments": dict(M365_ARGS[name])}
+            for name, pattern in M365_WORDS.items()
+            if re.search(pattern, q)
+        ]
+
+
+    def planner(question: str) -> list[dict[str, Any]]:
+        """Deterministic two-hop plan for the Andreas sample and close variants,
+        plus productivity steps when the question is about mail, calendar or OneDrive."""
+        q = question.lower()
+        steps: list[dict[str, Any]] = productivity_plan(question)
+        wants_eng = any(k in q for k in ("pr", "pull request", "issue", "repo", "invoice-service", "engineering"))
+        wants_biz = any(k in q for k in ("customer", "account", "invoice", "fo_", "business", "sales order", "d365"))
+        if wants_eng and ("pr" in q or "pull" in q):
+            steps.append({"slot": "engineering", "name": "list_prs", "arguments": {"repo": "invoice-service", "state": "open"}})
+        elif wants_eng and "issue" in q:
+            steps.append({"slot": "engineering", "name": "list_issues", "arguments": {"repo": "invoice-service", "state": "open"}})
+        elif wants_eng:
+            steps.append({"slot": "engineering", "name": "list_prs", "arguments": {"repo": "invoice-service", "state": "open"}})
+        if wants_biz:
+            steps.append(
+                {
+                    "slot": "business",
+                    "name": "fo_query",
+                    "arguments": {
+                        "entity": "CustomersV3",
+                        "filter": "CustomerAccount eq 'DEMO-C0001'",
+                        "select": "CustomerAccount,OrganizationName,AddressCity,CustomerGroupId",
+                        "top": 1,
+                    },
+                }
+            )
+        if not steps:
+            steps.append({"slot": "business", "name": "search_notes", "arguments": {"query": question[:200], "k": 3}})
+        return steps[:MAX_TOOL_CALLS]
+
+
+    def synthesize(question: str, tool_hops: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+        evidence = json.dumps(tool_hops, indent=2)[:3500]
+        prompt = (
+            "Answer the question using ONLY the tool results. Be concise (3-6 sentences).\n"
+            f"Question: {question}\n"
+            f"Tool results:\n{evidence}\n"
+            "Answer:"
+        )
+        gen = ollama_generate(prompt, num_predict=min(256, MAX_TOKENS))
+        answer = (gen.get("response") or "").strip()
+        usage = {
+            "prompt_eval_count": gen.get("prompt_eval_count"),
+            "eval_count": gen.get("eval_count"),
+        }
+        return answer, usage
+
+
+    def run_demo(question: str | None = None) -> dict[str, Any]:
+        q = question or (
+            "What open PRs touch the invoice service, and what customer account "
+            "owns that invoice line in the business tools?"
+        )
+        guard = classify(q)
+        hops: list[dict[str, Any]] = []
+        plan = [
+            {"slot": "engineering", "name": "list_prs", "arguments": {"repo": "invoice-service", "state": "open"}},
+            {
+                "slot": "business",
+                "name": "fo_query",
+                "arguments": {
+                    "entity": "CustomersV3",
+                    "filter": "CustomerAccount eq 'DEMO-C0001'",
+                    "select": "CustomerAccount,OrganizationName,AddressCity,CustomerGroupId",
+                    "top": 1,
+                },
+            },
+        ]
+        for step in plan:
+            if len(hops) >= MAX_TOOL_CALLS:
+                break
+            result = call_tool(step["slot"], step["name"], step["arguments"])
+            hops.append({**step, "result": result})
+        answer, usage = synthesize(q, hops)
+        return {
+            "ok": True,
+            "mode": "demo",
+            "question": q,
+            "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+            "tool_calls": hops,
+            "slots_used": sorted({h["slot"] for h in hops}),
+            "answer": answer,
+            "model": MODEL,
+            "usage": usage,
+            "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},
+        }
+
+
+    def run_ask(question: str) -> dict[str, Any]:
+        if not question or not question.strip():
+            raise RuntimeError("question must not be empty")
+        guard = classify(question.strip())
+        hops: list[dict[str, Any]] = []
+        tokens_used = 0
+
+        # Prefer a deterministic plan when the question clearly needs both slots.
+        plan = planner(question)
+        needs_both = any(s["slot"] == "engineering" for s in plan) and any(s["slot"] == "business" for s in plan)
+        needs_productivity = any(s["slot"] == "productivity" for s in plan)
+        if needs_both or needs_productivity:
+            for step in plan:
+                if len(hops) >= MAX_TOOL_CALLS:
+                    return {
+                        "ok": False,
+                        "stopped": "max_tool_calls",
+                        "question": question,
+                        "tool_calls": hops,
+                        "answer": f"Stopped: max_tool_calls={MAX_TOOL_CALLS}",
+                        "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},
+                    }
+                result = run_step(step)
+                hops.append({**step, "result": result})
+            answer, usage = synthesize(question, hops)
+            tokens_used += int(usage.get("eval_count") or 0) + int(usage.get("prompt_eval_count") or 0)
+            return {
+                "ok": True,
+                "mode": "ask-planned",
+                "question": question,
+                "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+                "tool_calls": hops,
+                "slots_used": sorted({h["slot"] for h in hops}),
+                "answer": answer,
+                "model": MODEL,
+                "usage": usage,
+                "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+            }
+
+        # Model-driven loop for other questions (short prompts).
+        history = f"Question: {question.strip()}\n"
+        for _ in range(MAX_TOOL_CALLS + 1):
+            if tokens_used >= MAX_TOKENS:
+                return {
+                    "ok": False,
+                    "stopped": "max_tokens",
+                    "question": question,
+                    "tool_calls": hops,
+                    "answer": f"Stopped: max_tokens={MAX_TOKENS}",
+                    "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+                }
+            prompt = TOOL_CATALOG + "\n" + history[-2500:] + "\nNext:"
+            gen = ollama_generate(prompt, num_predict=120)
+            tokens_used += int(gen.get("eval_count") or 0) + int(gen.get("prompt_eval_count") or 0)
+            kind, payload = parse_model_line(gen.get("response") or "")
+            if kind == "final":
+                return {
+                    "ok": True,
+                    "mode": "ask-model",
+                    "question": question,
+                    "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+                    "tool_calls": hops,
+                    "slots_used": sorted({h["slot"] for h in hops}),
+                    "answer": payload,
+                    "model": MODEL,
+                    "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+                }
+            if len(hops) >= MAX_TOOL_CALLS:
+                return {
+                    "ok": False,
+                    "stopped": "max_tool_calls",
+                    "question": question,
+                    "tool_calls": hops,
+                    "answer": f"Stopped: max_tool_calls={MAX_TOOL_CALLS}",
+                    "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
+                }
+            step = payload
+            result = run_step(step)
+            hops.append({**step, "result": result})
+            history += f"TOOL {step['slot']}.{step['name']} -> {json.dumps(result)[:800]}\n"
+
+        answer, usage = synthesize(question, hops)
+        return {
+            "ok": True,
+            "mode": "ask-model",
+            "question": question,
+            "guard": {"label": guard.get("label"), "malicious_score": guard.get("malicious_score")},
+            "tool_calls": hops,
+            "slots_used": sorted({h["slot"] for h in hops}),
+            "answer": answer,
+            "model": MODEL,
+            "usage": usage,
+            "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},
+        }
+
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            print("%s - %s" % (self.address_string(), fmt % args), flush=True)
+
+        def _send(self, code: int, body: bytes, content_type: str = "application/json") -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _read_json(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                data = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"invalid json: {e}") from e
+            if not isinstance(data, dict):
+                raise RuntimeError("body must be a JSON object")
+            return data
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = urlsplit(self.path).path
+            if path == "/healthz":
+                self._send(200, b"ok\n", "text/plain; charset=utf-8")
+                return
+            self._send(404, b'{"error":"not found"}\n')
+
+        def do_POST(self) -> None:  # noqa: N802
+            path = urlsplit(self.path).path
+            try:
+                if path == "/demo":
+                    body = self._read_json()
+                    out = run_demo(body.get("question"))
+                elif path == "/ask":
+                    body = self._read_json()
+                    out = run_ask(str(body.get("question") or ""))
+                else:
+                    self._send(404, b'{"error":"not found"}\n')
+                    return
+                payload = json.dumps(out).encode("utf-8")
+                self._send(200, payload)
+            except Exception as e:  # noqa: BLE001
+                err = {"ok": False, "error": str(e)}
+                self._send(503 if "Guard" in str(e) or "unavailable" in str(e) else 400, json.dumps(err).encode("utf-8"))
+
+
+    def main() -> None:
+        server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+        print(
+            f"control-layer on 0.0.0.0:{PORT} model={MODEL} "
+            f"max_tool_calls={MAX_TOOL_CALLS} max_tokens={MAX_TOKENS}",
+            flush=True,
+        )
+        server.serve_forever()
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-layer
+  namespace: si-lab
+  labels:
+    app: control-layer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: control-layer
+  template:
+    metadata:
+      labels:
+        app: control-layer
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: gpu-node
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control-layer
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/app/server.py"]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: OLLAMA_URL
+              value: http://ollama.si-lab.svc.cluster.local:11434
+            - name: MODEL
+              value: llama3.2:3b
+            - name: PROMPT_GUARD_URL
+              value: http://prompt-guard.si-lab.svc.cluster.local:8080/classify
+            - name: BUSINESS_MCP_URL
+              value: http://mcp-server:8000/mcp
+            - name: ENGINEERING_MCP_URL
+              value: http://engineering-mcp:8000/mcp
+            # Day 14 productivity slot (k8s/day-14-m365-mcp.yaml)
+            - name: M365_MCP_URL
+              value: http://m365-mcp.si-lab.svc.cluster.local:8000/mcp
+            - name: M365_MCP_HOST
+              value: m365-mcp:8000
+            - name: MAX_TOOL_CALLS
+              value: "4"
+            - name: MAX_TOKENS
+              value: "512"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: code
+          configMap:
+            name: control-layer-code
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-layer
+  namespace: si-lab
+  labels:
+    app: control-layer
+spec:
+  type: ClusterIP
+  selector:
+    app: control-layer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-layer-allow-si-lab
+  namespace: si-lab
+spec:
+  podSelector:
+    matchLabels:
+      app: control-layer
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080

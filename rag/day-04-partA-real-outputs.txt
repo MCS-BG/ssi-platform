@@ -1,0 +1,79 @@
+# Real Part A terminal session (verbatim, before redaction; node "gpu-node" -> gpu-node)
+$ kubectl get nodes
+NAME   STATUS   ROLES           AGE   VERSION
+d      Ready    control-plane   17h   v1.36.4+k3s1
+$ kubectl -n si-lab get pods
+NAME                      READY   STATUS    RESTARTS   AGE
+ollama-768d64b4c8-wqpq6   1/1     Running   0          13h
+$ kubectl -n si-lab exec deploy/ollama -- ollama pull nomic-embed-text
+pulling manifest 
+pulling 970aa74c0a90:  99% ▕█████████████████ ▏ 272 MB/274 MB   61 MB/s      0s
+verifying sha256 digest 
+writing manifest 
+success 
+$ kubectl -n si-lab exec deploy/ollama -- ollama list
+NAME                       ID              SIZE      MODIFIED       
+nomic-embed-text:latest    0a109f422b47    274 MB    25 seconds ago    
+llama3.2:3b                a80c4f17acd5    2.0 GB    13 hours ago      
+$ kubectl -n si-lab create secret generic pgvector-auth \
+> --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+secret/pgvector-auth created
+$ kubectl apply -f ~/ai-ops-homelab/k8s/day-04-pgvector.yaml
+$ kubectl -n si-lab get pods -w
+service/pgvector created
+statefulset.apps/pgvector created
+NAME                      READY   STATUS    RESTARTS   AGE
+ollama-768d64b4c8-wqpq6   1/1     Running   0          13h
+pgvector-0                0/1     Pending   0          0s
+pgvector-0                0/1     Pending   0          0s
+pgvector-0                0/1     Pending   0          6s
+pgvector-0                0/1     ContainerCreating   0          6s
+pgvector-0                0/1     ContainerCreating   0          7s
+pgvector-0                0/1     Running             0          12s
+pgvector-0                1/1     Running             0          23s
+pgvector-0                1/1     Running             0          23s
+$ kubectl -n si-lab get pvc
+NAME              STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS     VOLUMEATTRIBUTESCLASS   AGE
+data-pgvector-0   Bound    pvc-<uid>   10Gi       RWO            local-path       <unset>                 4m6s
+ollama-models     Bound    ollama-models-pv                           200Gi      RWO            ailab-external   <unset>                 13h
+$ kubectl -n si-lab exec -i pgvector-0 -- psql -U rag -d rag <<'SQL'
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE TABLE IF NOT EXISTS chunks (
+  id        bigserial PRIMARY KEY,
+  source    text NOT NULL,
+  chunk     text NOT NULL,
+  embedding vector(768) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw
+  ON chunks USING hnsw (embedding vector_cosine_ops);
+\dx
+\d chunks
+SQL
+CREATE EXTENSION
+CREATE TABLE
+CREATE INDEX
+                             List of installed extensions
+  Name   | Version |   Schema   |                     Description                      
+---------+---------+------------+------------------------------------------------------
+ plpgsql | 1.0     | pg_catalog | PL/pgSQL procedural language
+ vector  | 0.8.6   | public     | vector data type and ivfflat and hnsw access methods
+(2 rows)
+
+                                Table "public.chunks"
+  Column   |    Type     | Collation | Nullable |              Default               
+-----------+-------------+-----------+----------+------------------------------------
+ id        | bigint      |           | not null | nextval('chunks_id_seq'::regclass)
+ source    | text        |           | not null | 
+ chunk     | text        |           | not null | 
+ embedding | vector(768) |           | not null | 
+Indexes:
+    "chunks_pkey" PRIMARY KEY, btree (id)
+    "chunks_embedding_hnsw" hnsw (embedding vector_cosine_ops)
+
+# Step 7 (real commands used to put docs on the lab host)
+$ scp ~/Downloads/ai-ops-homelab-docs.zip <lab-user>@192.0.2.71:~/
+$ ssh <lab-user>@192.0.2.71 'mkdir -p /mnt/ailab-data/ai-ops-homelab/docs && python3 -m zipfile -e ~/ai-ops-homelab-docs.zip /mnt/ailab-data/ai-ops-homelab/docs && ls -l /mnt/ailab-data/ai-ops-homelab/docs'
+# verification ls output:
+-rwxr-xr-x 1 <lab-user> <lab-user>  6008 Sep 25 11:56 day-01-host-hardening.md
+-rwxr-xr-x 1 <lab-user> <lab-user> 12654 Sep 25 11:56 day-02-secure-k3s.md
+-rwxr-xr-x 1 <lab-user> <lab-user> 14264 Sep 25 11:56 day-03-model-serving.md

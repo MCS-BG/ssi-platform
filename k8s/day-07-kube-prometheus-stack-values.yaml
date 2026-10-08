@@ -1,0 +1,183 @@
+# Day 7 (stage A): kube-prometheus-stack sized for the monitoring node (8 GB RAM assumed).
+# Chart: prometheus-community/kube-prometheus-stack 91.5.3 (operator v0.94.1, Grafana subchart 13.2.5)
+# Install:
+#   helm upgrade -i kps prometheus-community/kube-prometheus-stack --version 91.5.3 \
+#     -n monitoring -f ~/ssi-platform/k8s/day-07-kube-prometheus-stack-values.yaml
+# Everything except node-exporter is pinned to the monitoring node (label + toleration below).
+# node-exporter is a DaemonSet in monitoring-host so it covers both nodes.
+fullnameOverride: kps
+
+crds:
+  enabled: true
+
+# k3s embeds these control-plane components in one process and binds their metrics
+# to 127.0.0.1, so Prometheus cannot scrape them. Scraping them only produces
+# permanently "down" targets and firing alerts.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+
+# No Alertmanager in the lab yet (saves ~100 MiB). Alerts still show in Prometheus/Grafana.
+alertmanager:
+  enabled: false
+
+prometheusOperator:
+  nodeSelector:
+    ailab/role: observability
+  tolerations:
+    - key: ailab/role
+      operator: Equal
+      value: observability
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+  admissionWebhooks:
+    patch:
+      nodeSelector:
+        ailab/role: observability
+      tolerations:
+        - key: ailab/role
+          operator: Equal
+          value: observability
+          effect: NoSchedule
+
+prometheus:
+  prometheusSpec:
+    nodeSelector:
+      ailab/role: observability
+    tolerations:
+      - key: ailab/role
+        operator: Equal
+        value: observability
+        effect: NoSchedule
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+    retention: 3d
+    retentionSize: 3GB
+    # Receives OTLP metrics from the OpenTelemetry Collector at /api/v1/otlp/v1/metrics.
+    enableOTLPReceiver: true
+    # Pick up ServiceMonitors/PodMonitors/rules from every release, not only this one.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 384Mi
+      limits:
+        memory: 1Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 8Gi
+
+kube-state-metrics:
+  nodeSelector:
+    ailab/role: observability
+  tolerations:
+    - key: ailab/role
+      operator: Equal
+      value: observability
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+# node-exporter needs hostNetwork, hostPID and a host root mount, which the baseline
+# policy on "monitoring" rejects, so it lives in the privileged monitoring-host namespace.
+# The subchart already tolerates every NoSchedule taint, so it runs on both nodes.
+prometheus-node-exporter:
+  namespaceOverride: monitoring-host
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      memory: 64Mi
+
+grafana:
+  nodeSelector:
+    ailab/role: observability
+  tolerations:
+    - key: ailab/role
+      operator: Equal
+      value: observability
+      effect: NoSchedule
+  # Admin credentials come from a Secret you create first (never the chart default).
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  persistence:
+    enabled: false
+  testFramework:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  sidecar:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 48Mi
+      limits:
+        memory: 128Mi
+  grafana.ini:
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+      check_for_plugin_updates: false
+  # Loki and Tempo are installed in stage C. Until then these two data sources
+  # show "connection refused" in Grafana, which is expected.
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring.svc.cluster.local:3100
+      jsonData:
+        derivedFields:
+          - name: trace_id
+            matcherType: label
+            matcherRegex: trace_id
+            datasourceUid: tempo
+            url: "$${__value.raw}"
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      access: proxy
+      url: http://tempo.monitoring.svc.cluster.local:3200
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: "-5m"
+          spanEndTimeShift: "5m"
+          filterByTraceID: true
+        serviceMap:
+          datasourceUid: prometheus

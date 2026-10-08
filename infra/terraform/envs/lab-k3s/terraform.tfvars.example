@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (git-ignored). No secrets here; those go in
+# secrets.auto.tfvars (also git-ignored), see secrets.auto.tfvars.example.
+
+# Leave unset and export TF_VAR_kubeconfig_path="$KUBECONFIG" instead, or:
+# kubeconfig_path = "~/.kube/config"
+
+# Tailnet DNS suffix used for the Langfuse login URL (home lab only).
+tailnet_domain = "example-tailnet.ts.net"
+
+# false = adopt the running lab exactly (plan: imports only).
+# true  = rebuild from scratch with the recorded image digests.
+pin_image_digests = false

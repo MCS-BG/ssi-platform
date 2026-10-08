@@ -1,0 +1,56 @@
+# Pins read from the live lab on 2026-10-06 (k3s --version, nvidia-smi,
+# dpkg-query on the lab host, kubectl get nodes -o wide). Change them only on
+# purpose; the OpenTofu pins are in infra/terraform/envs/lab-k3s/pins.tf.
+
+# ---- OS baseline -----------------------------------------------------------
+os_release_expected: "Ubuntu 26.04.1 LTS"
+timezone: America/Chicago
+
+# Package names only; versions float with unattended-upgrades (security fixes).
+# Observed on the lab host: ufw 0.36.2-9build1, fail2ban 1.1.0-9,
+# unattended-upgrades 2.12ubuntu9, openssh-server 1:10.2p1-2ubuntu3.6,
+# chrony 4.8-2ubuntu1, curl 8.18.0-1ubuntu2.7, jq 1.8.1-4ubuntu2.
+base_packages:
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+  - openssh-server
+  - chrony
+  - curl
+  - jq
+
+# ---- k3s -------------------------------------------------------------------
+k3s_version: "v1.36.4+k3s1"
+k3s_install_url: "https://get.k3s.io"
+k3s_pod_cidr: "10.42.0.0/16"
+k3s_service_cidr: "10.43.0.0/16"
+
+# The API server address agents join. Pin it to the lab host's reserved IP.
+# Root cause of today's outage: DHCP moved the lab host from .71 to .93 while
+# k3s and the agent's config and firewall still pointed at .71. Fix: a DHCP
+# reservation on the router for each node's MAC + these pins.
+k3s_server_ip: "{{ hostvars[groups['k3s_server'][0]]['node_ip'] }}"
+k3s_server_url: "https://{{ k3s_server_ip }}:6443"
+
+# Old addresses whose firewall rules should be removed after an IP change.
+k3s_stale_ips:
+  - "192.0.2.71"
+
+# Restart k3s / k3s-agent when their config changes. Handlers never run in
+# --check mode.
+k3s_restart_on_change: true
+
+# ---- NVIDIA (gpu_nodes only) -----------------------------------------------
+nvidia_driver_version: "595.91.07"
+nvidia_driver_package: "nvidia-driver-595-open=595.91.07-0ubuntu0.26.04.1"
+# Install the driver if nvidia-smi is missing. The lab host already had it.
+nvidia_manage_driver: true
+nvidia_container_toolkit_version: "1.20.1-1"
+nvidia_container_toolkit_packages:
+  - "nvidia-container-toolkit={{ nvidia_container_toolkit_version }}"
+  - "nvidia-container-toolkit-base={{ nvidia_container_toolkit_version }}"
+  - "libnvidia-container-tools={{ nvidia_container_toolkit_version }}"
+  - "libnvidia-container1={{ nvidia_container_toolkit_version }}"
+nvidia_toolkit_keyring: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+nvidia_toolkit_gpgkey_url: https://nvidia.github.io/libnvidia-container/gpgkey
+# NVIDIA device plugin chart 0.20.1 is installed by OpenTofu, not Ansible.

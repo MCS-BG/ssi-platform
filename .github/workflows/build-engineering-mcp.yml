@@ -1,0 +1,28 @@
+# CI build check for the engineering-mcp image: builds apps/engineering-mcp/ but does not push to ghcr.io. Runs on pushes to main that change apps/engineering-mcp/ or these workflow files.
+# Needed only for ssi_control_plane_mode = "helm"; the lab and the default cloud
+# envs run the code from ConfigMaps.
+name: build engineering-mcp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/engineering-mcp/**"
+      - ".github/workflows/build-engineering-mcp.yml"
+      - ".github/workflows/_build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-engineering-mcp
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-image.yml
+    with:
+      app: engineering-mcp
+    permissions:
+      contents: read

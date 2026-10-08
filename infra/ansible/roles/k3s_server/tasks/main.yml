@@ -1,0 +1,76 @@
+- name: Read the installed k3s version
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: k3s_server_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Decide whether k3s needs installing
+  ansible.builtin.set_fact:
+    k3s_server_install_needed: "{{ k3s_server_installed.rc != 0 or (k3s_version not in k3s_server_installed.stdout) }}"
+
+- name: k3s config directory
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# The node-ip pin. Same flags the lab host was installed with on Day 2
+# (--write-kubeconfig-mode 600 --secrets-encryption --disable traefik), now in
+# a config file so the IP no longer depends on whatever DHCP hands out.
+- name: k3s server config (node-ip pin)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
+- name: Install k3s server (pinned)
+  when: k3s_server_install_needed
+  block:
+    - name: Download the k3s install script
+      ansible.builtin.get_url:
+        url: "{{ k3s_install_url }}"
+        dest: /tmp/k3s-install.sh
+        mode: "0700"
+
+    - name: Run the install script
+      ansible.builtin.command: /tmp/k3s-install.sh server
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+      changed_when: true
+
+- name: k3s service enabled and running
+  ansible.builtin.systemd_service:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Read the join token for agents
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: k3s_server_token
+  no_log: true
+  failed_when: false
+
+- name: Share the join token with the agent play
+  ansible.builtin.set_fact:
+    k3s_node_token: "{{ k3s_server_token.content | default('') | b64decode | trim }}"
+  no_log: true
+
+- name: Check the NVIDIA runtime is wired into k3s containerd
+  ansible.builtin.command: grep -c nvidia /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+  register: k3s_server_nvidia_runtime
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: inventory_hostname in groups['gpu_nodes'] | default([])
+
+- name: Report the NVIDIA runtime state
+  ansible.builtin.debug:
+    msg: "{{ 'nvidia runtime present in k3s containerd config' if (k3s_server_nvidia_runtime.stdout | default('0') | int) > 0 else 'nvidia runtime NOT found: restart k3s after installing the toolkit' }}"
+  when: inventory_hostname in groups['gpu_nodes'] | default([])

@@ -1,0 +1,12 @@
+# Day 7 stage B overlay: traces also go to Langfuse (after Langfuse is up and the
+# langfuse-otlp-auth Secret exists in monitoring).
+#   helm upgrade otel-collector open-telemetry/opentelemetry-collector --version 0.173.1 -n monitoring \
+#     -f ~/ssi-platform/k8s/day-07-otel-collector-values.yaml \
+#     -f ~/ssi-platform/k8s/day-07-otel-collector-stage-b.yaml
+config:
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp_http/langfuse]

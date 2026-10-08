@@ -1,0 +1,59 @@
+# Day 7: zero-code OpenTelemetry for mcp-server (strategic-merge patch, no image or code change).
+# - the deps init container also installs the OTel distro, the OTLP/HTTP exporter and the
+#   starlette/requests/psycopg instrumentations (pinned; 1.44.0 / 0.65b0)
+# - the server starts through opentelemetry-instrument, which wraps the Starlette app
+#   (HTTP server spans for POST /mcp), outgoing requests calls (Ollama, fo-mock) and psycopg
+#   queries (pgvector), and exports traces + metrics to the collector on the monitoring node.
+# /healthz is excluded so probes do not create spans.
+# Apply:
+#   kubectl -n si-lab patch deployment mcp-server --patch-file ~/ssi-platform/k8s/day-07-mcp-server-otel-patch.yaml
+# Undo: kubectl -n si-lab apply -f ~/ssi-platform/k8s/day-06-mcp.yaml
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: deps
+          command:
+            - python
+            - -m
+            - pip
+            - install
+            - --no-cache-dir
+            - --disable-pip-version-check
+            - '--only-binary=:all:'
+            - --quiet
+            - --target
+            - /deps
+            - mcp==2.2.0
+            - 'psycopg[binary]==3.3.6'
+            - requests==2.34.2
+            - opentelemetry-distro==0.65b0
+            - opentelemetry-exporter-otlp-proto-http==1.44.0
+            - opentelemetry-instrumentation-starlette==0.65b0
+            - opentelemetry-instrumentation-requests==0.65b0
+            - opentelemetry-instrumentation-psycopg==0.65b0
+      containers:
+        - name: mcp-server
+          command:
+            - /deps/bin/opentelemetry-instrument
+            - python
+            - /app/server.py
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: mcp-server
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=si-lab,deployment.environment.name=homelab
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.monitoring.svc.cluster.local:4318
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: http/protobuf
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: otlp
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+            - name: OTEL_PYTHON_EXCLUDED_URLS
+              value: healthz
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_always_on

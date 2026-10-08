@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "si-business": {
+      "type": "http",
+      "url": "http://127.0.0.1:18001/mcp"
+    },
+    "si-engineering": {
+      "type": "http",
+      "url": "http://127.0.0.1:18002/mcp"
+    }
+  }
+}

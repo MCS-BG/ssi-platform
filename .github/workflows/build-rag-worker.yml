@@ -1,0 +1,27 @@
+# CI build check for the rag-worker image: builds apps/rag-worker/ but does not push to ghcr.io. Runs on pushes to main that change apps/rag-worker/ or these workflow files.
+# "Run workflow" on the Actions tab (workflow_dispatch) runs it by hand.
+name: build rag-worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/rag-worker/**"
+      - ".github/workflows/build-rag-worker.yml"
+      - ".github/workflows/_build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-rag-worker
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-image.yml
+    with:
+      app: rag-worker
+    permissions:
+      contents: read

@@ -1,0 +1,46 @@
+# Day 7 (stage B prerequisite): cert-manager, required by the ClickHouse operator's webhook,
+# which the Langfuse chart v2 uses to run ClickHouse. Pinned to the version in the langfuse-k8s README.
+# Install:
+#   helm upgrade -i cert-manager oci://quay.io/jetstack/charts/cert-manager --version v1.20.2 \
+#     -n cert-manager -f ~/ssi-platform/k8s/day-07-cert-manager-values.yaml
+crds:
+  enabled: true
+
+global:
+  nodeSelector:
+    ailab/role: observability
+
+tolerations: &obs-node
+  - key: ailab/role
+    operator: Equal
+    value: observability
+    effect: NoSchedule
+resources:
+  requests:
+    cpu: 10m
+    memory: 48Mi
+  limits:
+    memory: 192Mi
+prometheus:
+  enabled: false
+
+webhook:
+  tolerations: *obs-node
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      memory: 96Mi
+
+cainjector:
+  tolerations: *obs-node
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      memory: 192Mi
+
+startupapicheck:
+  tolerations: *obs-node

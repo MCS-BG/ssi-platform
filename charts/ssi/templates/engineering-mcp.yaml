@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engineering-mcp
+  namespace: {{ include "ssi.namespace" . }}
+  labels:
+    app: engineering-mcp
+    {{- include "ssi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.engineeringMcp }}
+  selector:
+    matchLabels:
+      app: engineering-mcp
+  template:
+    metadata:
+      labels:
+        app: engineering-mcp
+    spec:
+      containers:
+        - name: engineering-mcp
+          image: "{{ .Values.images.engineeringMcp.repository }}:{{ .Values.images.engineeringMcp.tag }}"
+          imagePullPolicy: {{ .Values.images.engineeringMcp.pullPolicy }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: PORT
+              value: "8000"
+            {{- with .Values.engineeringMcp.github }}
+            {{- if .enabled }}
+            # Day 16: real GitHub data (read-only). No Secret = Day 10 sample.
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .tokenSecretName }}
+                  key: token
+                  optional: true
+            - name: GITHUB_OWNER
+              value: {{ .owner | quote }}
+            - name: GITHUB_REPOS
+              value: {{ .repos | quote }}
+            - name: GITHUB_CACHE_SECONDS
+              value: {{ .cacheSeconds | quote }}
+            # Keep each tool result small: the control layer's answer prompt holds about 3500
+            # characters of evidence across all tool calls for a 3B model.
+            - name: RESULT_MAX_CHARS
+              value: "3000"
+            - name: FILE_MAX_CHARS
+              value: "2500"
+            - name: PROMPT_GUARD_URL
+              value: {{ .promptGuardUrl | quote }}
+            - name: PROMPT_GUARD_FAIL_OPEN
+              value: "false"
+            {{- else }}
+            - name: ENGINEERING_SOURCE
+              value: sample
+            {{- end }}
+            {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: engineering-mcp
+  namespace: {{ include "ssi.namespace" . }}
+  labels:
+    app: engineering-mcp
+    {{- include "ssi.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: engineering-mcp
+  ports:
+    - name: http
+      port: {{ .Values.service.engineeringMcp.port }}
+      targetPort: http
+{{- if and .Values.engineeringMcp.github.enabled .Values.engineeringMcp.github.egressNetworkPolicy }}
+---
+# Day 16: engineering-mcp egress only to DNS, Prompt Guard, the OTel collector and HTTPS (443)
+# on public addresses (api.github.com). Private, link-local and shared ranges are excluded.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: engineering-mcp-egress
+  namespace: {{ include "ssi.namespace" . }}
+  labels:
+    app: engineering-mcp
+    {{- include "ssi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: engineering-mcp
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: prompt-guard
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}

@@ -1,0 +1,3 @@
+# Day 15: psycopg for conversation memory in Postgres (optional at runtime: without it,
+# or without a reachable database, the control layer answers without memory).
+psycopg[binary]==3.3.6

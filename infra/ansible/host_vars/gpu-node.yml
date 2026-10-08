@@ -1,0 +1,28 @@
+# Lab host: k3s server (control plane) + GPU.
+# Reserve this IP for the lab host's Wi-Fi MAC on the router (DHCP reservation).
+node_ip: "192.0.2.93"
+k3s_node_name: gpu-node
+k3s_tls_san:
+  - "192.0.2.93"
+  - gpu-node
+k3s_node_labels:
+  - "nvidia.com/gpu.present=true"
+
+# Firewall: k3s ports open only to the agent node, plus the pod/service ranges.
+ufw_peer_rules:
+  - { from: "{{ hostvars['obs-node']['node_ip'] }}", port: "6443", proto: tcp, comment: "k3s api from monitoring node" }
+  - { from: "{{ hostvars['obs-node']['node_ip'] }}", port: "8472", proto: udp, comment: "flannel vxlan from monitoring node" }
+  - { from: "{{ hostvars['obs-node']['node_ip'] }}", port: "10250", proto: tcp, comment: "kubelet from monitoring node" }
+  - { from: "{{ hostvars['obs-node']['node_ip'] }}", port: "9100", proto: tcp, comment: "node-exporter from monitoring node" }
+
+# External USB drive for model weights and RAG docs (hostPath PVs in k8s/day-03 and day-04).
+data_mounts:
+  - path: /mnt/ailab-data
+    src: "UUID=<data-disk-uuid>"
+    fstype: exfat
+    opts: "defaults,uid=1000,gid=1000,umask=022,nofail"
+data_dirs:
+  - /mnt/ailab-data/ai-ops-homelab/ollama
+  - /mnt/ailab-data/ai-ops-homelab/docs
+  - /mnt/ailab-data/ai-ops-homelab/models
+  - /mnt/ailab-data/ai-ops-homelab/hf-cache

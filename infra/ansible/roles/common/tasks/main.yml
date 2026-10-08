@@ -1,0 +1,122 @@
+- name: Read OS release
+  ansible.builtin.command: lsb_release -ds
+  register: common_os_release
+  changed_when: false
+  check_mode: false
+
+- name: Warn when the OS differs from the pinned release
+  ansible.builtin.debug:
+    msg: "Expected {{ os_release_expected }}, found {{ common_os_release.stdout }}"
+  when: common_os_release.stdout != os_release_expected
+
+- name: Base packages are installed
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Time zone
+  community.general.timezone:
+    name: "{{ timezone }}"
+
+- name: Automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Key-only SSH (drop-in)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/99-lab-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload ssh
+
+- name: Services enabled and running
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - ssh.socket
+    - fail2ban
+    - chrony
+    - unattended-upgrades
+
+# Ubuntu 26.04 starts sshd through ssh.socket; ssh.service stays "disabled"
+# on purpose, so only make sure it is running.
+- name: sshd running
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: started
+
+- name: Firewall default deny incoming
+  community.general.ufw:
+    default: deny
+    direction: incoming
+
+- name: Firewall default allow outgoing
+  community.general.ufw:
+    default: allow
+    direction: outgoing
+
+- name: Allow SSH
+  community.general.ufw:
+    rule: allow
+    name: OpenSSH
+
+- name: Allow k3s traffic from the other node
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ item.from }}"
+    to_port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment }}"
+  loop: "{{ ufw_peer_rules | default([]) }}"
+
+- name: Allow k3s pod and service ranges
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ item.cidr }}"
+    comment: "{{ item.comment }}"
+  loop:
+    - { cidr: "{{ k3s_pod_cidr }}", comment: "k3s pods" }
+    - { cidr: "{{ k3s_service_cidr }}", comment: "k3s services" }
+
+- name: Remove rules for stale node IPs (after a DHCP change)
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ item.0 }}"
+    to_port: "{{ item.1.port }}"
+    proto: "{{ item.1.proto }}"
+    delete: true
+  loop: "{{ k3s_stale_ips | product(ufw_peer_rules | default([])) | list }}"
+  when: item.0 != item.1.from
+
+- name: Firewall enabled
+  community.general.ufw:
+    state: enabled
+
+- name: Data drive mounted
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.src }}"
+    fstype: "{{ item.fstype }}"
+    opts: "{{ item.opts }}"
+    state: mounted
+  loop: "{{ data_mounts | default([]) }}"
+
+- name: Data directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+  loop: "{{ data_dirs | default([]) }}"

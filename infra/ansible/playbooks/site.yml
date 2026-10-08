@@ -1,0 +1,26 @@
+# Rebuild or verify the lab nodes. Safe to re-run; use --check --diff first.
+#   ansible-playbook playbooks/site.yml --check --diff --ask-become-pass
+
+- name: OS baseline on every node
+  hosts: k3s_cluster
+  become: true
+  roles:
+    - common
+
+- name: NVIDIA driver and container toolkit on GPU nodes
+  hosts: gpu_nodes
+  become: true
+  roles:
+    - nvidia
+
+- name: k3s server (control plane)
+  hosts: k3s_server
+  become: true
+  roles:
+    - k3s_server
+
+- name: k3s agents
+  hosts: k3s_agent
+  become: true
+  roles:
+    - k3s_agent

@@ -1,0 +1,44 @@
+# Day 7: namespaces for the observability stack (scheduled on the monitoring node node).
+# Apply with: kubectl apply -f ~/ssi-platform/k8s/day-07-namespaces.yaml
+# Every namespace enforces the baseline Pod Security level except monitoring-host,
+# which only holds node-level agents (node-exporter, and the optional log agent).
+# Those need hostNetwork/hostPID/hostPath, like gpu-system on day 2.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring-host
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: langfuse
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clickhouse-operator
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest

@@ -1,0 +1,28 @@
+# CI build check for the control-layer image: builds apps/control-layer/ but does not push to ghcr.io. Runs on pushes to main that change apps/control-layer/ or these workflow files.
+# Needed only for ssi_control_plane_mode = "helm"; the lab and the default cloud
+# envs run the code from ConfigMaps.
+name: build control-layer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/control-layer/**"
+      - ".github/workflows/build-control-layer.yml"
+      - ".github/workflows/_build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-control-layer
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-image.yml
+    with:
+      app: control-layer
+    permissions:
+      contents: read

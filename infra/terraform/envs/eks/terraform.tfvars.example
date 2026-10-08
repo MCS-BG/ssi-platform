@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars (git-ignored). No secrets here (secrets.auto.tfvars).
+# AWS credentials come from your profile: aws sso login, AWS_PROFILE.
+
+region             = "us-east-1"
+name               = "ssi"
+kubernetes_version = "1.34"
+node_instance_type = "m6i.2xlarge"
+node_count         = 2
+
+# GPU node group for the model server. OFF by default (quota + cost).
+enable_gpu_pool   = false
+gpu_instance_type = "p5.48xlarge"
+gpu_node_count    = 1
+gpus_per_node     = 8
+
+# App layer
+model_backend          = "ollama"
+ssi_control_plane_mode = "manifests"
+image_registry         = "ghcr.io/mcs-bg"
+enable_observability   = false
+gateway_internal_lb    = true
+gateway_allowed_cidrs  = ["10.40.0.0/16"]
