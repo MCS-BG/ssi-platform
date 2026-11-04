@@ -51,13 +51,13 @@ header = f"""# Day 7 part 2: Prompt Guard 2 classifier service in si-lab (CPU, o
 # Model: {MODEL_ID} (gated on Hugging Face, Llama 4 Community License).
 #   Before applying: request access on the model page, then create the Secret hf-token
 #   (see docs/day-07-observability-steps.md). The token is only used by the init container.
-# Why CPU on the lab host: ollama holds the 4 GB NVIDIA laptop GPU (no time-slicing), the monitoring node
+# Why CPU on the lab host: ollama holds the 4 GB NVIDIA laptop GPU (no time-slicing), the obs-node
 #   RAM is budgeted for observability, and the 22M model answers in tens of ms on a laptop CPU.
 # First start installs ~1.2 GB of Python packages (torch CPU, transformers) and ~0.3 GB of model
 #   into the prompt-guard-cache PVC (pip's temp dir is on the PVC too, not in /tmp); later restarts reuse the cache and run fully offline.
 # To switch to the multilingual 86M model: change MODEL_ID and MODEL_DIR in build_manifest.py.
 # Apply:
-#   kubectl apply -f ~/ssi-platform/k8s/day-07-prompt-guard.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-07-prompt-guard.yaml
 """
 
 docs = [
@@ -91,7 +91,7 @@ docs = [
             "template": {
                 "metadata": {"labels": LABELS},
                 "spec": {
-                    "nodeSelector": {"kubernetes.io/hostname": "gpu-node"},
+                    "nodeSelector": {"kubernetes.io/hostname": "d"},
                     "automountServiceAccountToken": False,
                     "enableServiceLinks": False,
                     "securityContext": {

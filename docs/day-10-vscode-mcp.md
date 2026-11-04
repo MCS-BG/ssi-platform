@@ -10,7 +10,7 @@ How to read these steps:
 
 - Every code block has a label above it: **Terminal**.
 - Each block holds one command. No `#` comments inside fences. Quotes are zsh-safe.
-- `kubectl` needs `KUBECONFIG=~/.kube/si-lab.yaml` and the private path to the API.
+- `kubectl` needs `KUBECONFIG=~/.kube/k3s-lab.yaml` and the private path to the API.
 
 Private network: at home use Tailscale or the SSH tunnel to the lab host. At work, Private Link / VPN replaces Tailscale. After you are on the private net, the same localhost port-forwards work.
 
@@ -21,7 +21,7 @@ Confirm the deployments exist (Day 10 bridge already applied).
 Terminal
 
 ```bash
-export KUBECONFIG=~/.kube/si-lab.yaml
+export KUBECONFIG=~/.kube/k3s-lab.yaml
 ```
 
 Terminal
@@ -39,7 +39,7 @@ At home, if you are not already on Tailscale to the lab host, open the SSH tunne
 Terminal
 
 ```bash
-ssh -fN -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 6443:127.0.0.1:6443 <ssh-user>@gpu-node
+ssh -fN -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 6443:127.0.0.1:6443 <lab-user>@gpu-node
 ```
 
 At work: join the enterprise private network (Private Link / VPN). Skip Tailscale. Keep using the same kubeconfig once the API is reachable.

@@ -11,7 +11,7 @@
 # The PVC, Service and NetworkPolicy from day-07-prompt-guard.yaml are unchanged.
 # The image lines are pinned to a commit SHA by scripts/pin-images.sh (Day 8a step 7).
 # Apply:
-#   kubectl apply -f ~/ssi-platform/k8s/day-08a-prompt-guard.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-08a-prompt-guard.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -1,10 +1,11 @@
-# Day 7 (stage C): Loki in monolithic (single binary) mode on the monitoring node, filesystem storage,
+# Day 7 (stage C): Loki in monolithic (single binary) mode on the obs-node, filesystem storage,
+# Moved to node gpu-node with data on /srv/observability: docs/observability-move.md.
 # 48h retention. Receives logs from the OpenTelemetry Collector at /otlp.
 # Chart: grafana-community/loki 18.13.5 (Loki 3.7.8). The chart moved from grafana/helm-charts
 # to grafana-community/helm-charts in March 2026; grafana/loki is now GEL-only.
 # Install:
 #   helm upgrade -i loki grafana-community/loki --version 18.13.5 \
-#     -n monitoring -f ~/ssi-platform/k8s/day-07-loki-values.yaml
+#     -n monitoring -f ~/ai-ops-homelab/k8s/day-07-loki-values.yaml
 deploymentMode: Monolithic
 
 loki:
@@ -42,12 +43,7 @@ singleBinary:
   replicas: 1
   sidecar: false
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
   resources:
     requests:
       cpu: 50m

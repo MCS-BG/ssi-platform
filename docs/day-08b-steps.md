@@ -6,7 +6,7 @@ How to read these steps:
 
 - Every code block has a label above it that says where to run it: **Terminal**, **Lab host** or **Monitoring node**. Browser and app steps are numbered click lists.
 - Each block holds one command. Run them in order and compare what you see with the expected output.
-- Terminal commands that use `kubectl` or `helm` need `KUBECONFIG=~/.kube/si-lab.yaml` and the SSH tunnel to the API, as on Day 8a. From step 13 on, the tunnel runs over Tailscale.
+- Terminal commands that use `kubectl` or `helm` need `KUBECONFIG=~/.kube/k3s-lab.yaml` and the SSH tunnel to the API, as on Day 8a. From step 13 on, the tunnel runs over Tailscale.
 - Day 8a must be finished: the repo is on GitHub, the three images are public and pinned, and the Day 8a Deployments are running.
 
 ## What changes today
@@ -76,7 +76,7 @@ The SSH tunnel runs in its own tab (Day 8a "Before you start"). In your working 
 Terminal
 
 ```bash
-export KUBECONFIG=~/.kube/si-lab.yaml
+export KUBECONFIG=~/.kube/k3s-lab.yaml
 ```
 
 Terminal
@@ -583,7 +583,7 @@ Terminal
 ssh -N -L 6443:127.0.0.1:6443 <lab-user>@gpu-node.<tailnet>.ts.net
 ```
 
-Expected output: the first time, `The authenticity of host 'gpu-node.<tailnet>.ts.net (100.x.y.z)' can't be established` with an `ED25519 key fingerprint`. It is the same host key as before, only under a new name. Compare it with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the lab host, then type `yes`. After the passphrase the tab sits there, as usual.
+Expected output: the first time, `The authenticity of host 'd.<tailnet>.ts.net (100.x.y.z)' can't be established` with an `ED25519 key fingerprint`. It is the same host key as before, only under a new name. Compare it with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the lab host, then type `yes`. After the passphrase the tab sits there, as usual.
 
 In the working tab:
 

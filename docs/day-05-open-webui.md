@@ -7,7 +7,7 @@ I deployed Open WebUI into the `si-lab` namespace as a Deployment with its own v
 ## The lab at a glance
 
 - **My terminal:** where I edit manifests, run `kubectl`, and now open a browser tab. The Kubernetes API reaches it through the same SSH tunnel on port 6443 as on days 2 to 4, open in its own tab.
-- **Lab host:** a laptop running Ubuntu 26.04 and single-node k3s `v1.36.4+k3s1` (node `gpu-node`). The GPU is an NVIDIA laptop GPU with 4 GB of video memory. The `si-lab` namespace enforces the baseline Pod Security level.
+- **Lab host:** a GPU laptop running Ubuntu 26.04 and single-node k3s `v1.36.4+k3s1` (node `gpu-node`). The GPU is an NVIDIA GeForce NVIDIA laptop GPU with 4 GB of video memory. The `si-lab` namespace enforces the baseline Pod Security level.
 - **Already running from days 3 and 4:** Ollama as a Deployment behind the ClusterIP Service `ollama` on port 11434, serving `llama3.2:3b` and `nomic-embed-text` with the models on the external drive, and Postgres with pgvector behind the Service `pgvector` on port 5432.
 - **Storage:** the internal NVMe drive, which backs k3s' default `local-path` storage class, and the external USB drive, formatted exFAT and mounted at `/mnt/ailab-data`.
 
@@ -347,7 +347,7 @@ In the Open WebUI sidebar, New Chat, Search, and Notes are configured. Workspace
 Terminal:
 
 ```bash
-ssh -N -L 6443:127.0.0.1:6443 <lab-user>@192.0.2.71
+ssh -N -L 6443:127.0.0.1:6443 <lab-user>@<lab-lan-ip>
 ```
 
 With `-N`, SSH runs no remote command. When it's connected, it just sits at a blank cursor, and that's the healthy state.
@@ -355,7 +355,7 @@ With `-N`, SSH runs no remote command. When it's connected, it just sits at a bl
 **A new tab tried `localhost:8080`.** In a new tab, `kubectl` tried to reach `localhost:8080`. That's where it falls back when it has no kubeconfig, and I had only exported `KUBECONFIG` in the old tab. The fix was to add this line to `~/.zshrc` on my terminal:
 
 ```bash
-export KUBECONFIG=~/.kube/si-lab.yaml
+export KUBECONFIG=~/.kube/k3s-lab.yaml
 ```
 
 New tabs now point at the lab cluster straight away.

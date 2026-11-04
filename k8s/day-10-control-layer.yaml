@@ -5,7 +5,7 @@
 # BUSINESS_MCP_URL / ENGINEERING_MCP_URL use short Service DNS (search domain
 # si-lab.svc.cluster.local) so the Host header matches mcp-server allowlist.
 # Apply after engineering-mcp:
-#   kubectl apply -f ~/ssi-platform/k8s/day-10-control-layer.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-10-control-layer.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:

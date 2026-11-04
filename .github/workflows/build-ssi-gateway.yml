@@ -1,6 +1,6 @@
-# CI build check for the ssi-gateway image: builds apps/ssi-gateway/ but does not push to ghcr.io. Runs on pushes to main that change apps/ssi-gateway/ or these workflow files.
+# Build ghcr.io/<owner>/ssi-gateway (Day 13). Manual only: Actions tab -> "build ssi-gateway" -> Run workflow.
 # Needed only for ssi_control_plane_mode = "helm"; the lab and the default cloud
-# envs run the code from ConfigMaps.
+# envs run the code from ConfigMaps. Add a push trigger later if you want CI builds.
 name: build ssi-gateway
 
 on:
@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: build-ssi-gateway
@@ -26,3 +27,4 @@ jobs:
       app: ssi-gateway
     permissions:
       contents: read
+      packages: write

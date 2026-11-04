@@ -1,0 +1,116 @@
+# Nightly backups to the data lake (exFAT is fine for archive files; it is only unsafe as a
+# live Git/Postgres store). Both jobs run as uid 1000, the owner of the exFAT mount
+# (uid=1000,umask=022), so they can write there without root. Keeps 14 days.
+#   /mnt/ailab-data/backups/forgejo/pg/forgejo-YYYYMMDD-HHMM.sql.gz   (02:15 Central)
+#   /mnt/ailab-data/backups/forgejo/dump/forgejo-dump-YYYYMMDD-HHMM.tar.gz (02:45 Central)
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: forgejo-pg-dump, namespace: forgejo}
+spec:
+  schedule: "15 2 * * *"
+  timeZone: America/Chicago
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels: {app: forgejo-backup}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          nodeSelector: {kubernetes.io/hostname: gpu-node}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: pg-dump
+              image: docker.io/library/postgres:17.11-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: forgejo-db, key: password}}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  mkdir -p /backup/pg
+                  f=/backup/pg/forgejo-$(date +%Y%m%d-%H%M).sql.gz
+                  pg_dump -h forgejo-postgres -U forgejo -d forgejo --no-owner | gzip > "$f.part"
+                  mv "$f.part" "$f"
+                  find /backup/pg -name 'forgejo-*.sql.gz' -mtime +14 -delete
+                  ls -l "$f"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {memory: 512Mi}
+              volumeMounts: [{name: backup, mountPath: /backup}]
+          volumes:
+            - name: backup
+              persistentVolumeClaim: {claimName: forgejo-backup}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: forgejo-dump, namespace: forgejo}
+spec:
+  schedule: "45 2 * * *"
+  timeZone: America/Chicago
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels: {app: forgejo-backup}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          nodeSelector: {kubernetes.io/hostname: gpu-node}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: forgejo-dump
+              image: code.forgejo.org/forgejo/forgejo:15.0.9-rootless
+              env:
+                - {name: GITEA_WORK_DIR, value: /data}
+                - {name: GITEA_CUSTOM, value: /data/gitea}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  mkdir -p /backup/dump
+                  f=/backup/dump/forgejo-dump-$(date +%Y%m%d-%H%M).tar.gz
+                  forgejo dump --config /data/gitea/conf/app.ini --type tar.gz \
+                    --skip-db --tempdir /tmp --file "$f.part"
+                  mv "$f.part" "$f"
+                  find /backup/dump -name 'forgejo-dump-*.tar.gz' -mtime +14 -delete
+                  ls -l "$f"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {memory: 1Gi}
+              volumeMounts:
+                - {name: data, mountPath: /data, readOnly: true}
+                - {name: backup, mountPath: /backup}
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: data
+              persistentVolumeClaim: {claimName: forgejo-data, readOnly: true}
+            - name: backup
+              persistentVolumeClaim: {claimName: forgejo-backup}
+            - name: tmp
+              emptyDir: {sizeLimit: 20Gi}

@@ -1007,7 +1007,7 @@ def tools_call(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
         except ToolError as e:
             span_output(s, {"error": str(e)})
             return {"content": [{"type": "text", "text": str(e)}], "isError": True}
-        except Exception as e:  # noqa: BLE001 — surface tool errors to caller, never crash
+        except Exception as e:  # noqa: BLE001 — obs-node tool errors to caller, never crash
             span_output(s, {"error": f"{type(e).__name__}: {e}"})
             return {
                 "content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}],

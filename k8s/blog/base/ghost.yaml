@@ -1,0 +1,67 @@
+# Ghost 6 (pinned). Content on a static PV (overlay storage.yaml); database in blog-mysql.
+# The public URL is patched per overlay (prod: https://blog.example.com).
+apiVersion: v1
+kind: Service
+metadata: {name: ghost}
+spec:
+  selector: {app: ghost}
+  ports: [{name: http, port: 2368, targetPort: 2368}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ghost}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: ghost}}
+  template:
+    metadata: {labels: {app: ghost}}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector: {kubernetes.io/hostname: gpu-node}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: ghost
+          image: docker.io/library/ghost:6.69.0-alpine
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: url, value: "http://localhost:2368"}
+            - {name: database__client, value: mysql}
+            - {name: database__connection__host, value: blog-mysql}
+            - {name: database__connection__port, value: "3306"}
+            - {name: database__connection__user, value: ghost}
+            - {name: database__connection__database, value: ghost}
+            - name: database__connection__password
+              valueFrom: {secretKeyRef: {name: blog-mysql, key: password}}
+            - {name: privacy__useUpdateCheck, value: "false"}
+          ports: [{containerPort: 2368, name: http}]
+          startupProbe:
+            httpGet: {path: /, port: 2368, httpHeaders: [{name: X-Forwarded-Proto, value: https}]}
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /, port: 2368, httpHeaders: [{name: X-Forwarded-Proto, value: https}]}
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: {path: /, port: 2368, httpHeaders: [{name: X-Forwarded-Proto, value: https}]}
+            periodSeconds: 30
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: content, mountPath: /var/lib/ghost/content}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: content
+          persistentVolumeClaim: {claimName: blog-ghost-content}
+        - {name: tmp, emptyDir: {}}

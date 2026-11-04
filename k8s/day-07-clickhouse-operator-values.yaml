@@ -1,16 +1,12 @@
+# Moved to node gpu-node with the observability stack: docs/observability-move.md.
 # Day 7 (stage B prerequisite): ClickHouse operator. Langfuse chart v2 creates
 # ClickHouseCluster + KeeperCluster custom resources that this operator reconciles.
 # Pinned to the version in the langfuse-k8s README. Install after cert-manager is Ready:
 #   helm upgrade -i clickhouse-operator oci://ghcr.io/clickhouse/clickhouse-operator-helm --version 0.0.5 \
-#     -n clickhouse-operator -f ~/ssi-platform/k8s/day-07-clickhouse-operator-values.yaml
+#     -n clickhouse-operator -f ~/ai-ops-homelab/k8s/day-07-clickhouse-operator-values.yaml
 manager:
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
   resources:
     requests:
       cpu: 10m

@@ -18,7 +18,7 @@ How to read these steps:
 
 | Layer | Tool | Owns | Lives in |
 | --- | --- | --- | --- |
-| Network | Your router | DHCP reservations for the lab host (192.0.2.93) and the agent node (192.0.2.94) | router admin page |
+| Network | Your router | DHCP reservations for the lab host (<lab-lan-ip>) and the agent node (<obs-node-ip>) | router admin page |
 | Nodes | Ansible | packages, SSH hardening, ufw, data drive mount, NVIDIA driver check + container toolkit 1.20.1-1, k3s v1.36.4+k3s1, node-ip pin, agent join, node label/taint | `infra/ansible/` |
 | Cluster add-ons | OpenTofu `helm_release` | NVIDIA device plugin, kube-prometheus-stack, OpenTelemetry collectors, Loki, Tempo, cert-manager, ClickHouse operator, Langfuse, Tailscale operator (lab only) | `infra/terraform/apps/helm.tf` |
 | SSI apps | OpenTofu `kubectl_manifest` over `k8s/*.yaml` | every Deployment, Service, ConfigMap, PVC, NetworkPolicy and Ingress from Days 3-11 (the YAML stays the single source of truth) | `infra/terraform/apps/manifests.tf` |
@@ -96,7 +96,7 @@ flowchart TB
 
 ## 1. Fix the network first
 
-DHCP moved the lab host from 192.0.2.71 to 192.0.2.93. k3s still advertises .71 and the agent node still dials .71, so the agent node is `NotReady`. On the router, reserve 192.0.2.93 for the lab host and 192.0.2.94 for the agent node. Ansible then pins those IPs into k3s.
+DHCP moved the lab host from <lab-lan-ip> to <lab-lan-ip>. k3s still advertises .71 and the agent node still dials .71, so the agent node is `NotReady`. On the router, reserve <lab-lan-ip> for the lab host and <obs-node-ip> for the agent node. Ansible then pins those IPs into k3s.
 
 ## 2. Nodes with Ansible
 
@@ -126,7 +126,7 @@ Terminal
 ansible-playbook playbooks/site.yml --check --diff --ask-become-pass
 ```
 
-Expected today: the lab host reports one change (new `/etc/rancher/k3s/config.yaml` with `node-ip: 192.0.2.93`). The agent node reports its config (server URL .71 to .93) and firewall rules. That is the fix. Everything else is `ok`.
+Expected today: the lab host reports one change (new `/etc/rancher/k3s/config.yaml` with `node-ip: <lab-lan-ip>`). The agent node reports its config (server URL .71 to .93) and firewall rules. That is the fix. Everything else is `ok`.
 
 Terminal
 
@@ -142,7 +142,7 @@ Terminal
 kubectl get nodes -o wide
 ```
 
-Expected: both nodes `Ready`, INTERNAL-IP 192.0.2.93 and 192.0.2.94.
+Expected: both nodes `Ready`, INTERNAL-IP <lab-lan-ip> and <obs-node-ip>.
 
 ## 3. Cluster contents with OpenTofu (lab)
 

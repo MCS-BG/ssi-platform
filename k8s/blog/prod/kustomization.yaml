@@ -1,0 +1,16 @@
+# Prod blog: namespace blog, public at https://blog.example.com through a Cloudflare Tunnel.
+# Apply only after the operator approves (docs/blog.md):  sudo k3s kubectl apply -k k8s/blog/prod
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: blog
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - ../base
+  - cloudflared.yaml
+patches:
+  - target: {kind: Deployment, name: ghost}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: https://blog.example.com

@@ -1,5 +1,5 @@
-# CI build check for the m365-mcp image: builds apps/m365-mcp/ but does not push to ghcr.io. Runs on pushes to main that change apps/m365-mcp/ or these workflow files.
-# "Run workflow" on the Actions tab (workflow_dispatch) runs it by hand.
+# Build ghcr.io/<owner>/m365-mcp (Day 14) on every push to main that changes apps/m365-mcp/ or its workflow files.
+# "Run workflow" on the Actions tab (workflow_dispatch) rebuilds it by hand.
 # The lab runs the same code from a ConfigMap (k8s/day-14-m365-mcp.yaml); this image is for Helm mode.
 name: build m365-mcp
 
@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: build-m365-mcp
@@ -26,3 +27,4 @@ jobs:
       app: m365-mcp
     permissions:
       contents: read
+      packages: write

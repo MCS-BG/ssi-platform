@@ -2,7 +2,7 @@
 
 How an enterprise developer installs the **SSI Connector** and points the IDE at the company's private **SSI (Sovereign Super Intelligence)** endpoint.
 
-**Extension:** SSI Connector (`ssi-lab.ssi-connector`, v0.1.0)  
+**Extension:** SSI Connector (`blackbeardco.ssi-connector`, v0.1.0)  
 **Source:** `apps/ssi-vscode-connector/`  
 **Distribution:** VSIX (sideload). Not on the VS Code Marketplace yet.
 
@@ -163,7 +163,7 @@ The output is `ssi-connector-0.1.0.vsix`, which is git-ignored and never committ
 
 ### Home lab endpoint
 
-In the home lab, set **`ssi.endpoint`** to `http://192.0.2.93:30808`. That is the Day 11 gateway (`docs/day-11-ssi-gateway.md`) on a NodePort on the lab host, reachable from any machine on the home LAN with nothing running on the laptop. Reserve 192.0.2.93 for the lab host in the router (DHCP reservation) so the endpoint doesn't move.
+In the home lab, set **`ssi.endpoint`** to `http://<lab-lan-ip>:30808`. That is the Day 11 gateway (`docs/day-11-ssi-gateway.md`) on a NodePort on the lab host, reachable from any machine on the home LAN with nothing running on the laptop. Reserve <lab-lan-ip> for the lab host in the router (DHCP reservation) so the endpoint doesn't move.
 
 The lab link is plain HTTP, so the token crosses the home network unencrypted. That is fine for the lab only.
 

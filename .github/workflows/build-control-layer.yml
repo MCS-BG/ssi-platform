@@ -1,6 +1,6 @@
-# CI build check for the control-layer image: builds apps/control-layer/ but does not push to ghcr.io. Runs on pushes to main that change apps/control-layer/ or these workflow files.
+# Build ghcr.io/<owner>/control-layer (Day 13). Manual only: Actions tab -> "build control-layer" -> Run workflow.
 # Needed only for ssi_control_plane_mode = "helm"; the lab and the default cloud
-# envs run the code from ConfigMaps.
+# envs run the code from ConfigMaps. Add a push trigger later if you want CI builds.
 name: build control-layer
 
 on:
@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: build-control-layer
@@ -26,3 +27,4 @@ jobs:
       app: control-layer
     permissions:
       contents: read
+      packages: write

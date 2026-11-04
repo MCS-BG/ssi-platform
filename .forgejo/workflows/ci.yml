@@ -1,0 +1,21 @@
+# Forgejo port of .github/workflows/ci.yml. Runs on the staging runner (host executor):
+# GitHub-hosted ubuntu-latest does not exist on Forgejo. Same gates: scripts/sdlc/ci.sh.
+name: CI
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    name: CI
+    runs-on: si-lab-staging
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned dependencies (venv per run)
+        run: |
+          python3 -m venv .venv && . .venv/bin/activate
+          pip install -q --upgrade pip pytest pyyaml
+          pip install -q --no-deps -r apps/ssi-langgraph/requirements.txt
+          pip install -q -r apps/m365-mcp/requirements.txt
+      - name: Run all gates
+        run: . .venv/bin/activate && bash scripts/sdlc/ci.sh

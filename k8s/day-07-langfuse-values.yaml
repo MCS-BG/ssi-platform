@@ -1,4 +1,5 @@
-# Day 7 (stage B): self-hosted Langfuse v4 on the monitoring node, sized for a lab.
+# Day 7 (stage B): self-hosted Langfuse v4 on the obs-node, sized for a lab.
+# Moved to node gpu-node with data on /srv/observability: docs/observability-move.md.
 # Chart: langfuse/langfuse 2.1.2 (appVersion 4.38.0). Chart v2 bundles:
 #   postgres (groundhog2k chart, postgres:18), valkey (valkey-io chart, valkey 8.0),
 #   SeaweedFS all-in-one (S3-compatible blob store) and ClickHouse 26.4 + Keeper via the
@@ -12,16 +13,11 @@
 # the chart on first install and reused on upgrades (helm lookup). Do not "helm template | kubectl apply".
 # Install:
 #   helm upgrade -i langfuse langfuse/langfuse --version 2.1.2 \
-#     -n langfuse -f ~/ssi-platform/k8s/day-07-langfuse-values.yaml
+#     -n langfuse -f ~/ai-ops-homelab/k8s/day-07-langfuse-values.yaml
 
 langfuse:
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
 
   features:
     telemetryEnabled: false
@@ -96,12 +92,7 @@ langfuse:
 
 postgresql:
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
   resources:
     requests:
       cpu: 50m
@@ -114,12 +105,7 @@ postgresql:
 
 redis:
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
   resources:
     requests:
       cpu: 20m
@@ -134,12 +120,7 @@ clickhouse:
   cluster:
     replicas: 1
     nodeSelector:
-      ailab/role: observability
-    tolerations:
-      - key: ailab/role
-        operator: Equal
-        value: observability
-        effect: NoSchedule
+      kubernetes.io/hostname: gpu-node
     resources:
       requests:
         cpu: 250m
@@ -180,12 +161,7 @@ clickhouse:
     # Keeper must stay enabled (the ClickHouseCluster CR needs it); one replica is enough here.
     replicas: 1
     nodeSelector:
-      ailab/role: observability
-    tolerations:
-      - key: ailab/role
-        operator: Equal
-        value: observability
-        effect: NoSchedule
+      kubernetes.io/hostname: gpu-node
     resources:
       requests:
         cpu: 50m
@@ -200,12 +176,7 @@ s3:
   allInOne:
     # The SeaweedFS subchart takes nodeSelector/tolerations as multi-line strings.
     nodeSelector: |
-      ailab/role: observability
-    tolerations: |
-      - key: ailab/role
-        operator: Equal
-        value: observability
-        effect: NoSchedule
+      kubernetes.io/hostname: gpu-node
     resources:
       requests:
         cpu: 50m

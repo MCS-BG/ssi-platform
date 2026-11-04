@@ -6,7 +6,7 @@ How to read these steps:
 
 - Every code block has a label above it: **Terminal**.
 - Each block holds one command. No `#` comments inside fences. Quotes are zsh-safe.
-- `kubectl` needs `KUBECONFIG=~/.kube/si-lab.yaml` and the SSH tunnel to the API (Day 2 / Day 8).
+- `kubectl` needs `KUBECONFIG=~/.kube/k3s-lab.yaml` and the SSH tunnel to the API (Day 2 / Day 8).
 
 ## What is new
 
@@ -24,13 +24,13 @@ Primary demo is `curl` to `control-layer`. Open WebUI is unchanged (no click req
 Terminal
 
 ```bash
-ssh -fN -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 6443:127.0.0.1:6443 <ssh-user>@gpu-node
+ssh -fN -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 6443:127.0.0.1:6443 <lab-user>@gpu-node
 ```
 
 Terminal
 
 ```bash
-export KUBECONFIG=~/.kube/si-lab.yaml
+export KUBECONFIG=~/.kube/k3s-lab.yaml
 ```
 
 Terminal

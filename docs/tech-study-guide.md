@@ -807,8 +807,6 @@ All observability backends run on the monitoring node. Rollout was staged with a
 
 **In 30 seconds.** GitHub Actions builds one container image per app whenever that app's folder changes, and pushes it to GHCR tagged with the short commit SHA. The Deployments reference the SHA tag, never `latest`, so the cluster runs exactly the commit that was pinned.
 
-> In this public repo the workflows are build checks only (no login, no push, `contents: read`), so public CI can never overwrite the images a running lab pulls. The lab publishes its images from its own private repo using the setup described below.
-
 **What I configured and why.**
 - A reusable workflow `_build-image.yml` (`workflow_call`) and three callers: `build-rag-worker.yml`, `build-mcp-server.yml`, `build-prompt-guard.yml`. Each caller runs on pushes to `main` that change its app folder or the workflow files, or by hand (`workflow_dispatch`); `concurrency` prevents overlapping builds of one app.
 - Actions: `actions/checkout@v7`, `docker/setup-buildx-action@v4`, `docker/login-action@v4`, `docker/metadata-action@v6`, `docker/build-push-action@v7`. Build for `linux/amd64` with the GitHub Actions cache.
@@ -977,7 +975,7 @@ EKS with managed node groups or Auto Mode, Amazon Bedrock for chat and embedding
 
 ### Next: the D365 version of this architecture
 
-The design goal: "Later, I want to create this exact architecture to connect to D365 and have an MCP and RAG (RAG will be learn, any release notes from Microsoft regarding latest releases AND this will be where the customer specific configuration details will sit)".
+In the operator's words: "Later, I want to create this exact architecture to connect to D365 and have an MCP and RAG (RAG will be learn, any release notes from Microsoft regarding latest releases AND this will be where the customer specific configuration details will sit)".
 
 How the lab maps to that design on Azure:
 

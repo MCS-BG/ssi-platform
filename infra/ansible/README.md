@@ -13,9 +13,9 @@ Pins live in `group_vars/all.yml`. Per-node IPs, labels, firewall peers and moun
 
 ## The node-ip pin (why this exists)
 
-DHCP moved the lab host from 192.0.2.71 to 192.0.2.93. k3s on the lab host still advertises .71 until it restarts, and the agent node's config and firewall still point at .71, so the agent node is `NotReady`. The fix:
+DHCP moved the lab host from <lab-lan-ip> to <lab-lan-ip>. k3s on the lab host still advertises .71 until it restarts, and the agent node's config and firewall still point at .71, so the agent node is `NotReady`. The fix:
 
-1. On the router, add a DHCP reservation for each node's MAC (lab host 192.0.2.93, agent node 192.0.2.94).
+1. On the router, add a DHCP reservation for each node's MAC (lab host <lab-lan-ip>, agent node <obs-node-ip>).
 2. Run this playbook. It writes `node-ip` into both k3s configs, points the agent at the new server URL, opens the firewall for the new IP and removes the stale .71 rules.
 3. The handlers restart k3s and k3s-agent once (never in `--check` mode).
 
@@ -28,7 +28,7 @@ Tell SSH who you are on the nodes once, in `~/.ssh/config` on the terminal (not 
 ```text
 Host d
   User <ssh-user>
-Host 192.0.2.94
+Host <obs-node-ip>
   User <ssh-user>
   ProxyJump d
 ```

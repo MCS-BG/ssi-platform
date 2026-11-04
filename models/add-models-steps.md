@@ -27,13 +27,13 @@ About 5.6 GB of new files land on the external drive. All three new models are Q
 On the terminal, in its own tab:
 
 ```bash
-ssh -N -L 6443:127.0.0.1:6443 <lab-user>@192.0.2.71
+ssh -N -L 6443:127.0.0.1:6443 <lab-user>@<lab-lan-ip>
 ```
 
 On the terminal, in a second tab:
 
 ```bash
-export KUBECONFIG=~/.kube/si-lab.yaml
+export KUBECONFIG=~/.kube/k3s-lab.yaml
 kubectl get nodes
 kubectl -n si-lab get deploy ollama open-webui
 ```
@@ -42,7 +42,7 @@ Expected: node `gpu-node` is `Ready`, and both Deployments show `1/1`.
 
 ## 2. Check disk space on the external drive
 
-On the lab host (`ssh <lab-user>@192.0.2.71`):
+On the lab host (`ssh <lab-user>@<lab-lan-ip>`):
 
 ```bash
 df -h /mnt/ailab-data

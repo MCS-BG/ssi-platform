@@ -3,7 +3,7 @@
 #   /control/*          → control-layer (prefix stripped)
 #   /mcp/business       → mcp-server /mcp
 #   /mcp/engineering    → engineering-mcp /mcp
-# Lab endpoint: NodePort 30808 on the lab host, http://192.0.2.93:30808 from the home LAN
+# Lab endpoint: NodePort 30808 on the lab host, http://<lab-lan-ip>:30808 from the home LAN
 # (reserve that IP in the router). Enterprise: the same gateway behind an internal load
 # balancer with private DNS + TLS, reached over VPN / Private Link (never the K8s API server).
 # Stdlib server from apps/ssi-gateway/server.py via ConfigMap + python:3.12-slim.
@@ -407,7 +407,7 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: tailscale
         - ipBlock:
-            cidr: 192.0.2.0/24
+            cidr: <lan-subnet>
       ports:
         - protocol: TCP
           port: 8080

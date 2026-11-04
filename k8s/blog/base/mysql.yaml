@@ -1,0 +1,61 @@
+# MySQL 8.4 LTS for Ghost. Data on a static PV (overlay storage.yaml): /srv/<blog>/mysql on the data lake image.
+# Secret blog-mysql (keys: root-password, password) is created by scripts/blog/secrets.sh.
+apiVersion: v1
+kind: Service
+metadata: {name: blog-mysql}
+spec:
+  selector: {app: blog-mysql}
+  ports: [{name: mysql, port: 3306, targetPort: 3306}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: blog-mysql}
+spec:
+  serviceName: blog-mysql
+  replicas: 1
+  selector: {matchLabels: {app: blog-mysql}}
+  template:
+    metadata: {labels: {app: blog-mysql}}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/hostname: gpu-node}
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: mysql
+          image: docker.io/library/mysql:8.4.11
+          env:
+            - {name: MYSQL_DATABASE, value: ghost}
+            - {name: MYSQL_USER, value: ghost}
+            - name: MYSQL_PASSWORD
+              valueFrom: {secretKeyRef: {name: blog-mysql, key: password}}
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: blog-mysql, key: root-password}}
+          ports: [{containerPort: 3306, name: mysql}]
+          readinessProbe:
+            exec: {command: [sh, -c, 'mysqladmin ping -h 127.0.0.1 -u root -p"$MYSQL_ROOT_PASSWORD" --silent']}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            exec: {command: [sh, -c, 'mysqladmin ping -h 127.0.0.1 -u root -p"$MYSQL_ROOT_PASSWORD" --silent']}
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/mysql}
+            - {name: run, mountPath: /var/run/mysqld}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: blog-mysql}
+        - {name: run, emptyDir: {}}
+        - {name: tmp, emptyDir: {}}

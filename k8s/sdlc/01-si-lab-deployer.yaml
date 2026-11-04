@@ -1,0 +1,47 @@
+# SDLC: the Prod deploy identity, separate from staging. Used only by the Promote to Prod and
+# Rollback Prod jobs on the Prod runner (si-lab-runner, user ghrunner), through
+# /home/ghrunner/.kube/config (mode 600) on the lab host.
+# si-lab only: apply/read ConfigMaps, Services, Deployments, ReplicaSets, and NetworkPolicies;
+# read pods, pod logs, and events. No pods/exec, no pods/portforward, no Secrets, no deletes.
+#   sudo k3s kubectl apply -f k8s/sdlc/01-si-lab-deployer.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sdlc-deployer
+  namespace: si-lab
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sdlc-deployer-token
+  namespace: si-lab
+  annotations:
+    kubernetes.io/service-account.name: sdlc-deployer
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sdlc-deployer
+  namespace: si-lab
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, services]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sdlc-deployer
+  namespace: si-lab
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sdlc-deployer}
+subjects: [{kind: ServiceAccount, name: sdlc-deployer, namespace: si-lab}]

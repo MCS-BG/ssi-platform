@@ -1,0 +1,17 @@
+# Staging blog: namespace blog-staging, no tunnel (tested by port-forward only).
+#   sudo k3s kubectl apply -k k8s/blog/staging
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: blog-staging
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - ../base
+patches:
+  # Staging has no mail, so Ghost 6 new-device email verification would block the scripted
+  # login used by the branding test. Prod keeps verification on (see docs/blog.md, Mail).
+  - target: {kind: Deployment, name: ghost}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: security__staffDeviceVerification, value: "false"}

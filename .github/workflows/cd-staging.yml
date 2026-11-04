@@ -1,0 +1,45 @@
+name: CD Staging
+# On merge to main: CI again on the merged commit, then deploy to si-staging on the lab
+# runner and smoke test. Moves linked issues to "Staging" on the SSI Delivery board.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  pull-requests: read
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+  deploy:
+    name: Deploy to si-staging
+    needs: ci
+    runs-on: [self-hosted, si-lab-staging]  # staging runner only
+    environment:
+      name: staging
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        run: bash scripts/sdlc/deploy.sh staging "$GITHUB_SHA"
+      - name: Smoke test
+        run: bash scripts/sdlc/smoke.sh staging "$GITHUB_SHA"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Staging: ${GITHUB_SHA:0:12} (${{ job.status }})"
+            echo "Promote it: Actions, **Promote to Prod**, Run workflow, sha \`$GITHUB_SHA\`, type PROMOTE."
+          } >> "$GITHUB_STEP_SUMMARY"
+  board:
+    needs: deploy
+    uses: ./.github/workflows/project-sync.yml
+    with:
+      sha: ${{ github.sha }}
+      status: Staging
+    secrets: inherit

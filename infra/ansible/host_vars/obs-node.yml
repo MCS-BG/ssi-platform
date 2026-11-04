@@ -1,8 +1,8 @@
-# Agent node: observability (Prometheus, Grafana, Loki, Tempo, Langfuse).
+# Agent node. Observability moved to gpu-node on 2026-10-11; only node-exporter and otel-agent run here.
 # Reserve this IP for the agent node's Wi-Fi MAC on the router.
-node_ip: "192.0.2.94"
+node_ip: "<obs-node-ip>"
 k3s_node_name: obs-node
-k3s_flannel_iface: <wifi-iface>
+k3s_flannel_iface: wlp0s20f3
 k3s_node_labels:
   - "ailab/role=observability"
 k3s_node_taints:
@@ -11,6 +11,9 @@ k3s_node_taints:
 ufw_peer_rules:
   - { from: "{{ k3s_server_ip }}", port: "8472", proto: udp, comment: "flannel vxlan from lab host" }
   - { from: "{{ k3s_server_ip }}", port: "10250", proto: tcp, comment: "kubelet from lab host" }
+  # Prometheus moved to gpu-node on 2026-10-11 (docs/observability-move.md) and scrapes this node's
+  # node-exporter (hostNetwork) at <obs-node-ip>:9100.
+  - { from: "{{ hostvars['d']['node_ip'] }}", port: "9100", proto: tcp, comment: "node-exporter from lab host" }
 
 data_mounts: []
 data_dirs: []

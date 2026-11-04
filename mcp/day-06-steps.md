@@ -1,7 +1,7 @@
 # Day 6: MCP server in k3s, the terminal steps
 
 Everything below runs from the terminal and uses only `kubectl`, plus the built-in `curl`, `wc` and `shasum`. Workloads and data stay in the cluster on the lab host. Keep the SSH tunnel open in its own tab, as on earlier days:
-`ssh -N -L 6443:127.0.0.1:6443 <lab-user>@192.0.2.71`
+`ssh -N -L 6443:127.0.0.1:6443 <lab-user>@<lab-lan-ip>`
 
 What gets deployed in `si-lab` (one file, `day-06-mcp.yaml`):
 - **`fo-mock`**: a Deployment and ClusterIP Service on 8080. It's a read-only mock of a Dynamics 365 FO OData v4 endpoint (`/data/<EntitySet>`, `/data/$metadata`) with **fake demo data** and no auth. Real FO OData needs Microsoft Entra ID OAuth 2.0. This mock is cluster-internal only, and a NetworkPolicy lets only `mcp-server` reach it.
@@ -55,8 +55,8 @@ shasum -a 256 ~/ssi-platform/k8s/day-06-mcp.yaml
 
 Expected:
 ```text
-   44859 /Users/<you>/ssi-platform/k8s/day-06-mcp.yaml
-a69b9d17c8b79d6ad267e7de5d910b5c0b0a04104150852154561df9a2bbfc9a  /Users/<you>/ssi-platform/k8s/day-06-mcp.yaml
+   44861 /Users/<you>/ssi-platform/k8s/day-06-mcp.yaml
+719c294e84c8b64d48ad16f06b20c07b460529746b945b3ef8e806dcf8450215  /Users/<you>/ssi-platform/k8s/day-06-mcp.yaml
 ```
 If the hash differs, the paste was cut short or changed. Write the file again.
 
@@ -237,7 +237,7 @@ Expected: `job.batch "mcp-test" deleted`, then `job.batch/mcp-test created` amon
 
 ALL MCP CHECKS PASSED
 ```
-The day 4 answer ("...NVIDIA laptop GPU... 4 GB of video memory", with sources) comes back from rag-worker. "ALL MCP CHECKS PASSED" includes `search_notes`, which shows that mcp-server still reaches pgvector.
+The day 4 answer ("...NVIDIA GeForce NVIDIA laptop GPU... 4 GB of video memory", with sources) comes back from rag-worker. "ALL MCP CHECKS PASSED" includes `search_notes`, which shows that mcp-server still reaches pgvector.
 Roll back at any time with `kubectl -n si-lab delete networkpolicy pgvector-allow-clients`.
 
 ## Step 7 (optional): Call the server from the terminal with curl

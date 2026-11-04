@@ -1,18 +1,18 @@
-# Day 7: Observability on the monitoring node (Prometheus, Grafana, OpenTelemetry, Langfuse, Loki, Tempo) and Prompt Guard
+# Day 7: Observability on the obs-node (Prometheus, Grafana, OpenTelemetry, Langfuse, Loki, Tempo) and Prompt Guard
 
 Goal: every AI request in the lab becomes visible. Metrics go to Prometheus and Grafana, traces to Langfuse (LLM-focused view) and Tempo (infrastructure view), and logs to Loki. Everything runs on the `obs-node` node joined on Day 6b, so the lab host keeps its RAM and GPU for Ollama, pgvector and the apps. Part 2 adds Meta's Prompt Guard 2 as a small classifier service in `si-lab`.
 
 How to read these steps:
 
-- **Terminal** = the terminal laptop (zsh, `kubectl` and `helm` through the SSH tunnel, `KUBECONFIG=~/.kube/si-lab.yaml`).
-- **monitoring node** = `ssh "$OBS_NODE"` (only used to look at memory).
-- Keep the SSH tunnel to the API open in its own tab, as on Day 2. `export OBS_NODE=<obs-node-user>@<obs-node-ip>` as on Day 6b.
+- **Terminal** = the laptop (zsh, `kubectl` and `helm` through the SSH tunnel, `KUBECONFIG=~/.kube/k3s-lab.yaml`).
+- **obs-node** = `ssh "$obs-node"` (only used to look at memory).
+- Keep the SSH tunnel to the API open in its own tab, as on Day 2. `export obs-node=<obs-node-user>@<obs-node-ip>` as on Day 6b.
 - The manifests and values files live in `~/ssi-platform/k8s/` on the Terminal (file list in step 1).
 
 ## The plan in one picture
 
 ```text
- lab host "gpu-node" (GPU, 16 GB)                        obs-node (CPU only, 8 or 16 GB, tainted ailab/role=observability)
+ lab host "d" (GPU, 16 GB)                        obs-node (CPU only, 8 or 16 GB, tainted ailab/role=observability)
  si-lab namespace                                 monitoring: Prometheus, Grafana, kube-state-metrics, operator,
    mcp-server  --OTLP/HTTP 4318-->  otel-collector ---> Prometheus (/api/v1/otlp)        metrics
    rag-worker  --OTLP/HTTP 4318-->  (gateway)      ---> Langfuse web (/api/public/otel)  traces   [stage B]
@@ -30,11 +30,11 @@ Rollout in stages, checking memory between them:
 - **Stage C**: Loki and Tempo (single binary, 48 h retention) and an optional log-collecting agent.
 - **Part 2**: Prompt Guard 2 classifier service (on the lab host, CPU).
 
-## Sizing: what fits on the monitoring node
+## Sizing: what fits on the obs-node
 
 Numbers are Kubernetes memory requests/limits from the rendered charts in this repo, and my estimate of real idle usage. Limits are deliberately overcommitted (they only matter during spikes).
 
-| Stage | Components on the monitoring node | Requests | Limits | Estimated idle use |
+| Stage | Components on the obs-node | Requests | Limits | Estimated idle use |
 |---|---|---|---|---|
 | Base | Ubuntu headless + k3s agent + containerd | n/a | n/a | 0.8-1.0 GiB (add 1-1.5 GiB if the desktop runs) |
 | A | Prometheus 384Mi, Grafana 304Mi (raised to 256Mi request, 1Gi limit after an OOM kill), operator 64Mi, kube-state-metrics 32Mi, node-exporter 24Mi, collector 64Mi | 0.8 GiB | 2.3 GiB | 0.6-0.9 GiB |
@@ -42,15 +42,15 @@ Numbers are Kubernetes memory requests/limits from the rendered charts in this r
 | C | Loki 192Mi, Tempo 192Mi, otel-agent 48Mi | 0.4 GiB | 1.4 GiB | 0.3-0.6 GiB |
 | **A+B+C** | | **4.1 GiB** | **11 GiB** | **3.4-5.3 GiB** |
 
-**Measured on 2026-09-26 (all three stages running, `kubectl top` and `free -m`):** stage A 0.9 GiB (Prometheus 435Mi, Grafana 404Mi), stage B 1.9 GiB (Langfuse web 855Mi, worker 559Mi, ClickHouse 330Mi), stage C 0.2 GiB (Loki 97Mi, Tempo 58Mi, otel-agent 44Mi). About 3 GiB for the stack; the monitoring node showed 4.7 GiB used, 10.2 GiB available and 0 swap in use.
+**Measured on 2026-09-26 (all three stages running, `kubectl top` and `free -m`):** stage A 0.9 GiB (Prometheus 435Mi, Grafana 404Mi), stage B 1.9 GiB (Langfuse web 855Mi, worker 559Mi, ClickHouse 330Mi), stage C 0.2 GiB (Loki 97Mi, Tempo 58Mi, otel-agent 44Mi). About 3 GiB for the stack; the obs-node showed 4.7 GiB used, 10.2 GiB available and 0 swap in use.
 
 **Verdict:**
 
-- **8 GB monitoring node (assumed until you confirm):** Stage A fits easily. A+B fits **only if the monitoring node runs headless** (Day 6b step 4b), with roughly 2 GiB left over. Stage C on top is possible but tight: install it only if `free -m` still shows at least 1.5 GiB `available` after Langfuse has run for a day. If it doesn't, pick **either** Langfuse (B) **or** Loki+Tempo (C), not both. With the GNOME desktop running, it's A plus one of B or C.
-- **16 GB monitoring node:** A+B+C fit with room to spare; you can raise the Langfuse limits.
+- **8 GB obs-node (assumed until you confirm):** Stage A fits easily. A+B fits **only if the obs-node runs headless** (Day 6b step 4b), with roughly 2 GiB left over. Stage C on top is possible but tight: install it only if `free -m` still shows at least 1.5 GiB `available` after Langfuse has run for a day. If it doesn't, pick **either** Langfuse (B) **or** Loki+Tempo (C), not both. With the GNOME desktop running, it's A plus one of B or C.
+- **16 GB obs-node:** A+B+C fit with room to spare; you can raise the Langfuse limits.
 - **Honesty about Langfuse:** its documented minimums are far above this (web 2 CPU / 4 GiB, worker 2 / 4 GiB, Postgres 2 / 4 GiB, Redis 1 / 1.5 GiB, ClickHouse 2 / 8 GiB, blob storage 2 / 4 GiB, and a 4-core / 16 GiB VM for Docker Compose; https://langfuse.com/self-hosting/configuration/scaling). The values here run it at about a fifth of that, which is fine for one user and a few thousand traces a day, not for production. ClickHouse is the component most likely to be OOM-killed under a burst; the values apply ClickHouse's low-memory settings and drop its noisiest system log tables to compensate.
 - **Trimmed option if B does not fit:** keep A + C (Grafana with Tempo for traces and Loki for logs, about 1.3 GiB idle in total), and add Langfuse later on a 16 GB machine or after freeing RAM. Everything in stage A/C keeps working unchanged; only the `otlp_http/langfuse` exporter is dropped from the collector (see the stage C overlay comment).
-- **Disk:** the PVCs add up to about 41 GiB on the monitoring node (Prometheus 8, ClickHouse 10, Keeper 2, Postgres 5, Valkey 1, SeaweedFS 5, Loki 5, Tempo 5), plus about 6 GB of images. local-path does not enforce PVC sizes, so watch `df -h /` on the monitoring node.
+- **Disk:** the PVCs add up to about 41 GiB on the obs-node (Prometheus 8, ClickHouse 10, Keeper 2, Postgres 5, Valkey 1, SeaweedFS 5, Loki 5, Tempo 5), plus about 6 GB of images. local-path does not enforce PVC sizes, so watch `df -h /` on the obs-node.
 
 ## Versions (checked on 2026-09-25)
 
@@ -72,7 +72,7 @@ Notes on the choices:
 - Langfuse needs Helm 3.17 or newer (Helm 4 is fine) and Kubernetes 1.28 or newer.
 - Tempo 3.0 is new. If it misbehaves, `grafana-community/tempo` 2.4.0 (Tempo 2.10.8) takes the same values file.
 
-What was checked on my side (not on the cluster): every chart was rendered with `helm template` using these values files; all rendered objects passed `kubeconform -strict`; every pod lands on the monitoring node (nodeSelector + toleration) except node-exporter/otel-agent (both nodes) and two short Helm hook Jobs; the collector configs passed `otelcol-k8s validate` (0.160.0); the Loki and Tempo configs passed their own binaries' config checks (3.7.8 / 3.0.3); the ClickHouse low-memory settings were loaded by a real ClickHouse server; the zero-code tracing of the MCP server was run end to end against a local collector. A server-side dry run on the cluster was not possible.
+What was checked on my side (not on the cluster): every chart was rendered with `helm template` using these values files; all rendered objects passed `kubeconform -strict`; every pod lands on the obs-node (nodeSelector + toleration) except node-exporter/otel-agent (both nodes) and two short Helm hook Jobs; the collector configs passed `otelcol-k8s validate` (0.160.0); the Loki and Tempo configs passed their own binaries' config checks (3.7.8 / 3.0.3); the ClickHouse low-memory settings were loaded by a real ClickHouse server; the zero-code tracing of the MCP server was run end to end against a local collector. A server-side dry run on the cluster was not possible.
 
 ## Step 1: Files, Helm version and repositories
 
@@ -160,7 +160,7 @@ clickhouse-operator   Active   2s    baseline
 
 What the values file does:
 
-- Pins the operator, Prometheus, Grafana, kube-state-metrics and the admission webhook Jobs to the monitoring node (nodeSelector `ailab/role=observability` plus the toleration).
+- Pins the operator, Prometheus, Grafana, kube-state-metrics and the admission webhook Jobs to the obs-node (nodeSelector `ailab/role=observability` plus the toleration).
 - Runs node-exporter as a DaemonSet in `monitoring-host` on both nodes.
 - Turns off scraping of the control-plane components k3s embeds and binds to localhost (controller-manager, scheduler, proxy, etcd), which would otherwise show as permanently down with firing alerts. Alertmanager is off for now.
 - Prometheus: 3 days / 3 GB retention on an 8 Gi local-path volume, the OTLP receiver enabled (the collector pushes app metrics to `/api/v1/otlp`), and ServiceMonitors from any release picked up.
@@ -200,7 +200,7 @@ kps-operator-xxxxxxxxxx-xxxxx             1/1     Running   0          3m    10.
 prometheus-kps-prometheus-0               2/2     Running   0          2m    10.42.1.x    obs-node
 
 NAME                                 READY   STATUS    RESTARTS   AGE   IP             NODE
-kps-prometheus-node-exporter-xxxxx   1/1     Running   0          3m    192.0.2.71   d
+kps-prometheus-node-exporter-xxxxx   1/1     Running   0          3m    <lab-lan-ip>   d
 kps-prometheus-node-exporter-xxxxx   1/1     Running   0          3m    <obs-node-ip>   obs-node
 ```
 
@@ -222,11 +222,11 @@ kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-passwor
 
 Expected output: `Forwarding from 127.0.0.1:3001 -> 3000` in the first tab and nothing in the second. Browse to http://localhost:3001, log in as `admin` with the pasted password, and open **Dashboards > Kubernetes / Compute Resources / Node (Pods)**: both `gpu-node` and `obs-node` should have data.
 
-Check the scrape targets. In another tab run `kubectl -n monitoring port-forward svc/kps-prometheus 9090:9090` and browse to http://localhost:9090/targets. Expected: `node-exporter` (2 targets), `kubelet` and `cadvisor` (2 each), `kube-state-metrics`, `apiserver`, `coredns`, `kps-operator`, `kps-prometheus` and `kps-grafana` all **UP**. If the lab host's node-exporter or kubelet is **DOWN** with a timeout, the lab host ufw rules for 9100/10250 from the monitoring node are missing (Day 6b step 5).
+Check the scrape targets. In another tab run `kubectl -n monitoring port-forward svc/kps-prometheus 9090:9090` and browse to http://localhost:9090/targets. Expected: `node-exporter` (2 targets), `kubelet` and `cadvisor` (2 each), `kube-state-metrics`, `apiserver`, `coredns`, `kps-operator`, `kps-prometheus` and `kps-grafana` all **UP**. If the lab host's node-exporter or kubelet is **DOWN** with a timeout, the lab host ufw rules for 9100/10250 from the obs-node are missing (Day 6b step 5).
 
 ## Step 4: Install the OpenTelemetry Collector (gateway)
 
-One collector Deployment on the monitoring node receives OTLP on 4317 (gRPC) and 4318 (HTTP) at `otel-collector.monitoring.svc.cluster.local`, adds Kubernetes attributes (namespace, pod, deployment) to every signal, and in stage A sends metrics to Prometheus and prints traces and logs to its own log (the `debug` exporter) so you can see data arrive before Langfuse and Tempo exist. It uses the `otelcol-k8s` distribution image, runs as non-root with a read-only root filesystem, and has a 256 Mi memory limit with the `memory_limiter` processor at 80%.
+One collector Deployment on the obs-node receives OTLP on 4317 (gRPC) and 4318 (HTTP) at `otel-collector.monitoring.svc.cluster.local`, adds Kubernetes attributes (namespace, pod, deployment) to every signal, and in stage A sends metrics to Prometheus and prints traces and logs to its own log (the `debug` exporter) so you can see data arrive before Langfuse and Tempo exist. It uses the `otelcol-k8s` distribution image, runs as non-root with a read-only root filesystem, and has a 256 Mi memory limit with the `memory_limiter` processor at 80%.
 
 Note: chart 0.173.1 uses the new component names `otlp_http`, `otlp_grpc` and `k8s_attributes` (older examples on the web say `otlphttp`, `otlp` and `k8sattributes`).
 
@@ -301,11 +301,11 @@ Expected output: lines like
 Terminal
 
 ```bash
-ssh "$OBS_NODE" 'free -m'
+ssh "$obs-node" 'free -m'
 kubectl top node obs-node
 ```
 
-Expected output: the `available` column. **8 GB monitoring node:** continue only if `available` is at least 4000 MiB (Langfuse needs about 2-3 GiB at idle plus headroom). If not, run headless (Day 6b step 4b) or skip to stage C instead. **16 GB:** continue.
+Expected output: the `available` column. **8 GB obs-node:** continue only if `available` is at least 4000 MiB (Langfuse needs about 2-3 GiB at idle plus headroom). If not, run headless (Day 6b step 4b) or skip to stage C instead. **16 GB:** continue.
 
 ## Step 7: cert-manager (Langfuse prerequisite)
 
@@ -368,7 +368,7 @@ secret/langfuse-otlp-auth created
 
 What `day-07-langfuse-values.yaml` sets:
 
-- Every component on the monitoring node: web, worker, Postgres, Valkey, SeaweedFS, and ClickHouse + Keeper (through the operator's pod template).
+- Every component on the obs-node: web, worker, Postgres, Valkey, SeaweedFS, and ClickHouse + Keeper (through the operator's pod template).
 - Lab sizes (see the sizing table), small volumes on local-path (ClickHouse 10 Gi, Postgres 5 Gi, SeaweedFS 5 Gi, Keeper 2 Gi, Valkey 1 Gi), one Keeper replica instead of three.
 - ClickHouse low-memory settings from https://clickhouse.com/docs/operations/tips: a 256 MB mark cache, `max_threads` 2, `max_block_size` 8192, parallel parsing/formatting off, and the server capped at 75% of its limit. The `trace_log`, `text_log`, `metric_log`, `asynchronous_metric_log`, `latency_log` and `opentelemetry_span_log` system tables are removed, as Langfuse recommends (https://langfuse.com/self-hosting/deployment/infrastructure/clickhouse).
 - Telemetry to Langfuse off, sign-up disabled, `NEXTAUTH_URL` `http://localhost:3002` (the port-forward below), longer liveness delays for the first start on a laptop CPU, and no PodDisruptionBudgets (single replicas).
@@ -457,11 +457,11 @@ Expected output: nothing. In Langfuse, **Tracing** shows new traces from `rag-wo
 Terminal
 
 ```bash
-ssh "$OBS_NODE" 'free -m'
+ssh "$obs-node" 'free -m'
 kubectl top pods -n langfuse
 ```
 
-Expected output: **8 GB monitoring node with Langfuse running:** continue only if `available` is at least 1500 MiB after Langfuse has been running for a while. Otherwise stop here, or remove Langfuse (`helm -n langfuse uninstall langfuse`) and use stage C instead. **16 GB:** continue.
+Expected output: **8 GB obs-node with Langfuse running:** continue only if `available` is at least 1500 MiB after Langfuse has been running for a while. Otherwise stop here, or remove Langfuse (`helm -n langfuse uninstall langfuse`) and use stage C instead. **16 GB:** continue.
 
 ## Step 14: Loki (monolithic, 48 h)
 
@@ -489,7 +489,7 @@ Expected output: `STATUS: deployed`, and `tempo-0` `1/1 Running` on `obs-node`.
 
 ## Step 16: Collector stage C
 
-Traces go to both Tempo and Langfuse, and logs to Loki. On an 8 GB monitoring node where you skipped Langfuse, delete `otlp_http/langfuse` from the traces exporters line in `day-07-otel-collector-stage-c.yaml` first.
+Traces go to both Tempo and Langfuse, and logs to Loki. On an 8 GB obs-node where you skipped Langfuse, delete `otlp_http/langfuse` from the traces exporters line in `day-07-otel-collector-stage-c.yaml` first.
 
 Terminal
 
@@ -528,11 +528,11 @@ Final memory check:
 Terminal
 
 ```bash
-ssh "$OBS_NODE" 'free -m'
+ssh "$obs-node" 'free -m'
 kubectl top pods -A --sort-by=memory
 ```
 
-Expected output: `available` should stay above about 1 GiB on the monitoring node. Write the numbers down; they are the real sizing data for this lab (the table above is an estimate).
+Expected output: `available` should stay above about 1 GiB on the obs-node. Write the numbers down; they are the real sizing data for this lab (the table above is an estimate).
 
 # Day 8 preview: richer traces from code
 
@@ -556,7 +556,7 @@ Facts from the model cards (https://huggingface.co/meta-llama/Llama-Prompt-Guard
 
 Design (`day-07-prompt-guard.yaml`, built from `prompt-guard/server.py`):
 
-- Runs in `si-lab` on the **lab host, CPU only**. The 4 GB GPU is held by Ollama with no time-slicing, the monitoring node RAM is budgeted for observability, and the 22M model needs about 0.5 GiB of RAM and tens of milliseconds per request on a laptop CPU.
+- Runs in `si-lab` on the **lab host, CPU only**. The 4 GB GPU is held by Ollama with no time-slicing, the obs-node RAM is budgeted for observability, and the 22M model needs about 0.5 GiB of RAM and tens of milliseconds per request on a laptop CPU.
 - A 3 Gi local-path PVC `prompt-guard-cache` holds the Python packages (torch CPU 2.14.0, transformers 5.17.0, FastAPI) and the model, so only the first start downloads (about 1.2 GB of packages and 0.3 GB of model). After that the server runs fully offline (`HF_HUB_OFFLINE=1`).
 - Two init containers (`deps`, then `model`) and the server container. All run as UID 10001 with a read-only root filesystem, all capabilities dropped and no service account token. The HF token is only given to the `model` init container, from the Secret `hf-token`.
 - API: `POST /classify` with `{"text": "..."}` returns `label`, `malicious_score`, `chunks` and `latency_ms`; `GET /healthz`. Service `prompt-guard:8080`, and a NetworkPolicy that only admits pods from `si-lab`.
@@ -653,11 +653,11 @@ Expected output: the Day 6 and Day 4 objects `configured`. Re-applying restores 
 ## Troubleshooting
 
 - **Pod `Pending` with `untolerated taint {ailab/role: observability}`:** a component without the toleration. Every values file here sets it; check you passed `-f` with the right file.
-- **PVC `Pending` on the monitoring node:** the local-path provisioner starts a helper pod on the target node; look at `kubectl -n kube-system get pods | grep helper` and its events.
-- **`OOMKilled` in `langfuse` (usually ClickHouse or web):** raise that component's limit in the values file if the monitoring node has room (`free -m`), otherwise go back to the trimmed option (A + C).
+- **PVC `Pending` on the obs-node:** the local-path provisioner starts a helper pod on the target node; look at `kubectl -n kube-system get pods | grep helper` and its events.
+- **`OOMKilled` in `langfuse` (usually ClickHouse or web):** raise that component's limit in the values file if the obs-node has room (`free -m`), otherwise go back to the trimmed option (A + C).
 - **Collector `401`/`403` to Langfuse:** the `langfuse-otlp-auth` Secret does not match the project keys. Recreate both Secrets from step 9 (delete them first), then restart `langfuse-web` and the collector. Headless init only creates keys that don't already exist.
 - **No traces at all:** `kubectl -n si-lab exec deploy/mcp-server -- env | grep OTEL_` should list the variables; the collector's NetworkPolicy admits `si-lab`; `kubectl -n monitoring logs deploy/otel-collector` shows receiver errors.
-- **Webhook timeouts when installing (cert-manager, ClickHouse operator, Prometheus operator):** the API server on `gpu-node` reaches webhook pods on the monitoring node over Flannel VXLAN. Re-check UDP 8472 in both firewalls (Day 6b step 5).
+- **Webhook timeouts when installing (cert-manager, ClickHouse operator, Prometheus operator):** the API server on `gpu-node` reaches webhook pods on the obs-node over Flannel VXLAN. Re-check UDP 8472 in both firewalls (Day 6b step 5).
 
 ## References
 

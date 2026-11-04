@@ -1,0 +1,103 @@
+# Forgejo: namespace and storage. Git data and PostgreSQL live on an ext4 filesystem
+# (/srv/forgejo), NOT directly on the exFAT data lake (exFAT has no Unix permissions or
+# symlinks; Git and PostgreSQL need both). See docs/forgejo.md, "Storage".
+# /srv/forgejo is created by infra/forgejo/storage-setup.sh (needs the operator's approval).
+# Static local PVs pinned to node gpu-node (the node with the data lake drive).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: forgejo
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: forgejo-local
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: forgejo-data
+spec:
+  capacity: {storage: 150Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: forgejo-local
+  claimRef: {namespace: forgejo, name: forgejo-data}
+  local: {path: /srv/forgejo/data}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: forgejo-postgres
+spec:
+  capacity: {storage: 40Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: forgejo-local
+  claimRef: {namespace: forgejo, name: forgejo-postgres}
+  local: {path: /srv/forgejo/postgres}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: forgejo-data
+  namespace: forgejo
+spec:
+  storageClassName: forgejo-local
+  accessModes: [ReadWriteOnce]
+  volumeName: forgejo-data
+  resources: {requests: {storage: 150Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: forgejo-postgres
+  namespace: forgejo
+spec:
+  storageClassName: forgejo-local
+  accessModes: [ReadWriteOnce]
+  volumeName: forgejo-postgres
+  resources: {requests: {storage: 40Gi}}
+---
+# Backups target on the exFAT data lake (archive files only). A local PV rather than a
+# hostPath volume, so the namespace can enforce the baseline Pod Security level.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: forgejo-backup
+spec:
+  capacity: {storage: 500Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: forgejo-local
+  claimRef: {namespace: forgejo, name: forgejo-backup}
+  local: {path: /mnt/ailab-data/backups/forgejo}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: forgejo-backup
+  namespace: forgejo
+spec:
+  storageClassName: forgejo-local
+  accessModes: [ReadWriteOnce]
+  volumeName: forgejo-backup
+  resources: {requests: {storage: 500Gi}}

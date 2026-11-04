@@ -21,4 +21,8 @@ ssi_control_plane_mode = "manifests"
 image_registry         = "ghcr.io/mcs-bg"
 enable_observability   = false
 gateway_internal_lb    = true
+
+# Day 14-16 slots (off by default)
+enable_engineering_mcp_github = false
+enable_m365_mcp               = false
 gateway_allowed_cidrs  = ["10.50.0.0/20"]

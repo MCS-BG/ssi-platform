@@ -1,0 +1,76 @@
+# Stateless rule: all blog data lives in dedicated data folders on the data lake, never under
+# /var/lib/rancher. Static local PVs (Retain) pinned to node gpu-node:
+#   /srv/blog/mysql, /srv/blog/ghost-content  (ext4 image, infra/blog/storage-setup.sh)
+#   /mnt/ailab-data/backups/blog                          (backups, plain files on exFAT)
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata: {name: blog-mysql}
+spec:
+  capacity: {storage: 4Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: blog-static
+  claimRef: {namespace: blog, name: blog-mysql}
+  local: {path: /srv/blog/mysql}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: blog-mysql}
+spec:
+  storageClassName: blog-static
+  volumeName: blog-mysql
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 4Gi}}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata: {name: blog-ghost-content}
+spec:
+  capacity: {storage: 6Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: blog-static
+  claimRef: {namespace: blog, name: blog-ghost-content}
+  local: {path: /srv/blog/ghost-content}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: blog-ghost-content}
+spec:
+  storageClassName: blog-static
+  volumeName: blog-ghost-content
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 6Gi}}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata: {name: blog-backup}
+spec:
+  capacity: {storage: 20Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: blog-static
+  claimRef: {namespace: blog, name: blog-backup}
+  local: {path: /mnt/ailab-data/backups/blog}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: blog-backup}
+spec:
+  storageClassName: blog-static
+  volumeName: blog-backup
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 20Gi}}

@@ -120,3 +120,15 @@
     path: "{{ item }}"
     state: directory
   loop: "{{ data_dirs | default([]) }}"
+
+- name: inotify limits
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-inotify.conf
+    content: |
+      {% for k, v in sysctl_inotify.items() %}
+      {{ k }}={{ v }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply sysctl

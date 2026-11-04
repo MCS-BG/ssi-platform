@@ -1,10 +1,10 @@
 # Lab host: k3s server (control plane) + GPU.
 # Reserve this IP for the lab host's Wi-Fi MAC on the router (DHCP reservation).
-node_ip: "192.0.2.93"
+node_ip: "<lab-lan-ip>"
 k3s_node_name: gpu-node
 k3s_tls_san:
-  - "192.0.2.93"
-  - gpu-node
+  - "<lab-lan-ip>"
+  - d
 k3s_node_labels:
   - "nvidia.com/gpu.present=true"
 
@@ -18,7 +18,7 @@ ufw_peer_rules:
 # External USB drive for model weights and RAG docs (hostPath PVs in k8s/day-03 and day-04).
 data_mounts:
   - path: /mnt/ailab-data
-    src: "UUID=<data-disk-uuid>"
+    src: "UUID=69C4-B612"
     fstype: exfat
     opts: "defaults,uid=1000,gid=1000,umask=022,nofail"
 data_dirs:

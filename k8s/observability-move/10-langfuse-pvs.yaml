@@ -1,0 +1,89 @@
+# Static local PVs on node gpu-node for the langfuse namespace (phase 1 of the
+# observability move, docs/observability-move.md). Each PV is pre-bound (claimRef) to the
+# exact PVC name the chart/StatefulSet already uses, and keeps storageClassName local-path,
+# so no immutable volumeClaimTemplate has to change. Retain: deleting a PVC never deletes data.
+# Paths live in /srv/observability (ext4 loop image, infra/observability/storage-setup.sh).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-langfuse-postgresql
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 5Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: langfuse, name: postgres-data-langfuse-postgresql-0}
+  local: {path: /srv/observability/langfuse-postgresql}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-langfuse-clickhouse
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 10Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: langfuse, name: clickhouse-storage-volume-langfuse-clickhouse-0-0-0}
+  local: {path: /srv/observability/langfuse-clickhouse}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-langfuse-keeper
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 2Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: langfuse, name: clickhouse-storage-volume-langfuse-keeper-0-0}
+  local: {path: /srv/observability/langfuse-keeper}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-langfuse-redis
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: langfuse, name: langfuse-redis}
+  local: {path: /srv/observability/langfuse-redis}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-langfuse-s3
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 5Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: langfuse, name: langfuse-s3-all-in-one-data}
+  local: {path: /srv/observability/langfuse-s3}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]

@@ -1,0 +1,59 @@
+# Nightly backup at 03:15 Central: mysqldump of the ghost DB plus a tar of Ghost content,
+# written to the PVC blog-backup (prod: a static PV on the data lake). Keeps 14 days.
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: blog-backup}
+spec:
+  schedule: "15 3 * * *"
+  timeZone: America/Chicago
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata: {labels: {app: blog-backup}}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          nodeSelector: {kubernetes.io/hostname: gpu-node}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: backup
+              image: docker.io/library/mysql:8.4.11
+              env:
+                - name: MYSQL_PWD
+                  valueFrom: {secretKeyRef: {name: blog-mysql, key: password}}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  mkdir -p /backup/db /backup/content
+                  ts=$(date +%Y%m%d-%H%M)
+                  mysqldump -h blog-mysql -u ghost --single-transaction --no-tablespaces ghost | gzip > /backup/db/ghost-$ts.sql.gz.part
+                  mv /backup/db/ghost-$ts.sql.gz.part /backup/db/ghost-$ts.sql.gz
+                  tar -czf /backup/content/content-$ts.tar.gz.part -C /content .
+                  mv /backup/content/content-$ts.tar.gz.part /backup/content/content-$ts.tar.gz
+                  find /backup -name '*.gz' -mtime +14 -delete
+                  ls -l /backup/db/ghost-$ts.sql.gz /backup/content/content-$ts.tar.gz
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {memory: 512Mi}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: content, mountPath: /content, readOnly: true}
+          volumes:
+            - name: backup
+              persistentVolumeClaim: {claimName: blog-backup}
+            - name: content
+              persistentVolumeClaim: {claimName: blog-ghost-content}

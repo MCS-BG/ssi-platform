@@ -1,0 +1,49 @@
+# Forgejo port of .github/workflows/promote-prod.yml. Gate 2: only the repo owner, typing
+# PROMOTE, for a commit on main that carries si/staging=success. Runs on the Prod runner.
+name: Promote to Prod
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit on main to promote (full SHA)"
+        required: true
+      confirm:
+        description: "Type PROMOTE to deploy to Prod (si-lab)"
+        required: true
+jobs:
+  promote:
+    name: Gate, deploy si-lab, smoke, release
+    runs-on: si-lab
+    timeout-minutes: 30
+    env:
+      FORGEJO_TOKEN: ${{ github.token }}
+      SHA_IN: ${{ inputs.sha }}
+      CONFIRM: ${{ inputs.confirm }}
+      ACTOR: ${{ github.actor }}
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Approval gate
+        run: |
+          set -euo pipefail
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "Only $OWNER may promote (got $ACTOR)"; exit 1; }
+          [[ "$CONFIRM" == "PROMOTE" ]] || { echo "Type PROMOTE to confirm"; exit 1; }
+          SHA=$(git rev-parse --verify "${SHA_IN}^{commit}")
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "$SHA is not on main"; exit 1; }
+          python3 scripts/forgejo/forge.py status-ok "$SHA" si/staging
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+      - name: Deploy at the promoted commit
+        run: git checkout -q "$SHA" && bash scripts/sdlc/deploy.sh prod "$SHA"
+      - name: Smoke test
+        run: bash scripts/sdlc/smoke.sh prod "$SHA"
+      - name: Tag and release
+        run: |
+          set -euo pipefail
+          day=$(TZ=America/Chicago date +%Y.%m.%d)
+          git fetch -q --tags
+          n=1; while git rev-parse -q --verify "refs/tags/v$day-$n" >/dev/null; do n=$((n+1)); done
+          prev=$(git tag -l 'v20*' --sort=-creatordate | head -1); prev=${prev:--}
+          python3 scripts/forgejo/forge.py release "v$day-$n" "$SHA" "$prev"
+      - name: Cards to Done (Prod)
+        run: python3 scripts/forgejo/forge.py cards "$SHA" stage/prod --close

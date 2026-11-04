@@ -1,5 +1,5 @@
-# Day 7: namespaces for the observability stack (scheduled on the monitoring node node).
-# Apply with: kubectl apply -f ~/ssi-platform/k8s/day-07-namespaces.yaml
+# Day 7: namespaces for the observability stack (scheduled on the obs-node node).
+# Apply with: kubectl apply -f ~/ai-ops-homelab/k8s/day-07-namespaces.yaml
 # Every namespace enforces the baseline Pod Security level except monitoring-host,
 # which only holds node-level agents (node-exporter, and the optional log agent).
 # Those need hostNetwork/hostPID/hostPath, like gpu-system on day 2.

@@ -8,7 +8,7 @@ How to read these steps:
 
 - Every code block has a label above it: **Terminal** (the laptop) or **Browser**.
 - Each block holds one command. Quotes are zsh-safe.
-- `kubectl` needs `KUBECONFIG=~/.kube/si-lab.yaml` and the SSH tunnel to the API (Day 2 / Day 8).
+- `kubectl` needs `KUBECONFIG=~/.kube/k3s-lab.yaml` and the SSH tunnel to the API (Day 2 / Day 8).
 
 ## What is new
 
@@ -28,7 +28,7 @@ How to read these steps:
 | `m365_whoami` | `GET /me` | Display name, sign-in name, id. Use it as the smoke test. |
 | `m365_list_mail` | `GET /me/mailFolders/{folder}/messages` | Newest first, `top` 1-25, optional `unread_only`. |
 | `m365_get_mail` | `GET /me/messages/{id}` | Headers + body preview. No attachments, no full HTML body. |
-| `m365_list_events` | `GET /me/calendarView` | Now through the next `days` (1-31), times in `M365_TIMEZONE`. |
+| `m365_list_events` | `GET /me/calendarView` | Now through the next `days` (1-31), times in `DEFAULT_TIMEZONE` (IANA, default America/Chicago; `auto` or invalid falls back to it, Day 18). |
 | `m365_list_onedrive` | `GET /me/drive/root/children` or `/root:/{path}:/children` | Folder listing. |
 | `m365_search_onedrive` | `GET /me/drive/root/search(q=...)` | Works on personal OneDrive. |
 

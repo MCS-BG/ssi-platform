@@ -7,7 +7,7 @@
 # The PV, PVC and ConfigMap from day-04-rag-worker.yaml are unchanged (the ConfigMap is unused now).
 # The image line is pinned to a commit SHA by scripts/pin-images.sh (Day 8a step 7).
 # Apply:
-#   kubectl apply -f ~/ssi-platform/k8s/day-08a-rag-worker.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-08a-rag-worker.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:

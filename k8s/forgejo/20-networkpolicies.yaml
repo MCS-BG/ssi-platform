@@ -1,0 +1,81 @@
+# Forgejo NetworkPolicies: default-deny ingress for the namespace, then narrow allowances.
+#   - Forgejo web (3000) and SSH (2222) only from the Tailscale proxies (namespace tailscale)
+#     and from the Forgejo runners on the lab host (node traffic is allowed by k3s).
+#   - PostgreSQL only from Forgejo and the backup job.
+#   - Forgejo egress: DNS, PostgreSQL, and HTTPS to the internet (GitHub migration, webhooks),
+#     but not to cluster or LAN private ranges.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny-ingress, namespace: forgejo}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: forgejo-allow-tailscale, namespace: forgejo}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: forgejo}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: tailscale}
+      ports:
+        - {port: 3000, protocol: TCP}
+        - {port: 2222, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: postgres-allow-forgejo, namespace: forgejo}
+spec:
+  podSelector:
+    matchLabels: {app: forgejo-postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: forgejo}
+        - podSelector:
+            matchLabels: {app: forgejo-backup}
+      ports: [{port: 5432, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: forgejo-egress, namespace: forgejo}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: forgejo}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {app: forgejo-postgres}
+      ports: [{port: 5432, protocol: TCP}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
+      ports: [{port: 443, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: backup-egress, namespace: forgejo}
+spec:
+  podSelector:
+    matchLabels: {app: forgejo-backup}
+  policyTypes: [Egress, Ingress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+    - to:
+        - podSelector:
+            matchLabels: {app: forgejo-postgres}
+      ports: [{port: 5432, protocol: TCP}]

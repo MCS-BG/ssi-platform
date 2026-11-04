@@ -34,7 +34,7 @@ k3s_server_url: "https://{{ k3s_server_ip }}:6443"
 
 # Old addresses whose firewall rules should be removed after an IP change.
 k3s_stale_ips:
-  - "192.0.2.71"
+  - "<lab-lan-ip>"
 
 # Restart k3s / k3s-agent when their config changes. Handlers never run in
 # --check mode.
@@ -54,3 +54,10 @@ nvidia_container_toolkit_packages:
 nvidia_toolkit_keyring: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 nvidia_toolkit_gpgkey_url: https://nvidia.github.io/libnvidia-container/gpgkey
 # NVIDIA device plugin chart 0.20.1 is installed by OpenTofu, not Ansible.
+
+# inotify limits (/etc/sysctl.d/99-inotify.conf). The Ubuntu defaults (128 instances) ran out
+# on gpu-node: node-exporter crashed with "too many open files" (629 restarts in 15 days). Applied by
+# hand on gpu-node on 2026-10-11 at 9:31 PM CT; Ansible keeps the same file on both nodes.
+sysctl_inotify:
+  fs.inotify.max_user_instances: 1024
+  fs.inotify.max_user_watches: 524288

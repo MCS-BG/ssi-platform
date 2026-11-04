@@ -1,8 +1,6 @@
-# Reusable workflow: build one app image from apps/<app>/ for linux/amd64 as a CI check.
-# This public repo builds and checks every image but does not push to ghcr.io, so CI can never
-# overwrite the images a running lab pulls. To publish your own images from a fork, add a
-# docker/login-action step, set push: true and grant packages: write.
-# Called by every build-*.yml workflow in this folder.
+# Reusable workflow: build one app image from apps/<app>/ for linux/amd64 and push it to
+# ghcr.io/<owner>/<app>, tagged with the short commit SHA and "latest".
+# Called by build-rag-worker.yml, build-mcp-server.yml and build-prompt-guard.yml.
 # Docs:
 #   https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images
 #   https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
@@ -19,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   build:
@@ -37,6 +36,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Log in to ghcr.io with the workflow token
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Tags and labels
         id: meta
@@ -53,13 +58,12 @@ jobs:
             org.opencontainers.image.description=ssi-platform ${{ inputs.app }} image
             org.opencontainers.image.licenses=MIT
 
-      - name: Build (linux/amd64, no push)
+      - name: Build and push (linux/amd64)
         uses: docker/build-push-action@v7
         with:
           context: apps/${{ inputs.app }}
           platforms: linux/amd64
-          push: false
-          outputs: type=cacheonly
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}

@@ -1,0 +1,57 @@
+# SDLC: the si-staging namespace and the sdlc-staging-deployer ServiceAccount used by the self-hosted
+# GitHub Actions runner si-lab-staging-runner (user ghrunner-staging) for STAGING jobs. Scoped to si-staging
+# only: no cluster-wide rights, no Secrets, no deletes, no pods/exec. Apply once as cluster admin:
+#   sudo k3s kubectl apply -f k8s/sdlc/00-si-staging-and-staging-deployer.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: si-staging
+  labels:
+    si.sdlc/stage: staging
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sdlc-staging-deployer
+  namespace: si-staging
+---
+# Long-lived token for the runner's kubeconfig (stays on the lab host, mode 600).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sdlc-staging-deployer-token
+  namespace: si-staging
+  annotations:
+    kubernetes.io/service-account.name: sdlc-staging-deployer
+type: kubernetes.io/service-account-token
+---
+# Staging: deploy and read. No pods/exec or port-forward (smoke tests go over the network).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sdlc-staging-deployer
+  namespace: si-staging
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, services]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sdlc-staging-deployer
+  namespace: si-staging
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sdlc-staging-deployer}
+subjects: [{kind: ServiceAccount, name: sdlc-staging-deployer, namespace: si-staging}]
+---
+# Prod uses its own ServiceAccount, si-lab/sdlc-deployer (01-si-lab-deployer.yaml).
+# This staging account has no rights in si-lab at all.

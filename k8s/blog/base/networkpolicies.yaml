@@ -1,0 +1,61 @@
+# Default deny in and out. Ghost: in on 2368 only from cloudflared; out to DNS, MySQL, and
+# public HTTPS/SMTP (themes, Gravatar, mail). MySQL: in only from Ghost and the backup job.
+# kubectl port-forward (staging tests) goes through the kubelet and is not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-dns}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: ghost}
+spec:
+  podSelector: {matchLabels: {app: ghost}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: cloudflared}}}]
+      ports: [{protocol: TCP, port: 2368}]
+  egress:
+    - to: [{podSelector: {matchLabels: {app: blog-mysql}}}]
+      ports: [{protocol: TCP, port: 3306}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8]
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 465}, {protocol: TCP, port: 587}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: blog-mysql}
+spec:
+  podSelector: {matchLabels: {app: blog-mysql}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: ghost}}
+        - podSelector: {matchLabels: {app: blog-backup}}
+      ports: [{protocol: TCP, port: 3306}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: blog-backup}
+spec:
+  podSelector: {matchLabels: {app: blog-backup}}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to: [{podSelector: {matchLabels: {app: blog-mysql}}}]
+      ports: [{protocol: TCP, port: 3306}]

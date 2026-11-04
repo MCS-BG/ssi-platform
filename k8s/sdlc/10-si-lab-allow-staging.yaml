@@ -1,0 +1,23 @@
+# SDLC (one-time, needs the operator's OK because it lives in si-lab): lets staging pods in si-staging
+# reach the shared Prompt Guard in si-lab. Additive only: it opens port 8080 on prompt-guard to
+# one more namespace and changes nothing else. Without it, staging smoke tests skip the /ask
+# check (health checks still run). Ollama has no ingress policy and is reachable already.
+#   sudo k3s kubectl apply -f k8s/sdlc/10-si-lab-allow-staging.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prompt-guard-allow-si-staging
+  namespace: si-lab
+spec:
+  podSelector:
+    matchLabels:
+      app: prompt-guard
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: si-staging
+      ports:
+        - port: 8080
+          protocol: TCP

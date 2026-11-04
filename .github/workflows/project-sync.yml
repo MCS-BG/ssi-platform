@@ -1,0 +1,31 @@
+name: Board sync
+# Moves the issues that a PR closes to a Status on the "SSI Delivery" Project (v2).
+# GITHUB_TOKEN cannot write user-owned Projects, so this needs the PROJECT_TOKEN secret
+# (classic PAT with the project and repo scopes). Without it, the job skips with a notice.
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  workflow_call:
+    inputs:
+      sha: {type: string, required: true}
+      status: {type: string, required: true}
+      close: {type: boolean, default: false}
+    secrets:
+      PROJECT_TOKEN: {required: false}
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ inputs.sha }}
+          STATUS: ${{ inputs.status || 'In Review' }}
+          CLOSE: ${{ inputs.close }}
+        run: python3 scripts/sdlc/board.py
