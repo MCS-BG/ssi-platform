@@ -1,0 +1,31 @@
+# Forgejo port of .github/workflows/rollback.yml: redeploy a release tag to si-lab.
+name: Rollback Prod
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to redeploy, for example v2026.10.10-1"
+        required: true
+      confirm:
+        description: "Type ROLLBACK to confirm"
+        required: true
+jobs:
+  rollback:
+    runs-on: si-lab
+    timeout-minutes: 20
+    env:
+      ACTOR: ${{ github.actor }}
+      OWNER: ${{ github.repository_owner }}
+      CONFIRM: ${{ inputs.confirm }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Gate
+        run: |
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "Only $OWNER may roll back"; exit 1; }
+          [[ "$CONFIRM" == "ROLLBACK" ]] || { echo "Type ROLLBACK to confirm"; exit 1; }
+      - uses: actions/checkout@v4
+        with: {ref: "refs/tags/${{ inputs.tag }}"}
+      - name: Redeploy
+        run: bash scripts/sdlc/deploy.sh prod "$(git rev-parse HEAD)"
+      - name: Smoke test
+        run: bash scripts/sdlc/smoke.sh prod "$(git rev-parse HEAD)"

@@ -60,7 +60,7 @@ My first `kubectl apply` failed because nothing was listening on port 6443 on my
 Terminal:
 
 ```bash
-ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 6443:127.0.0.1:6443 <lab-user>@192.0.2.71
+ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 6443:127.0.0.1:6443 <lab-user>@<lab-lan-ip>
 ```
 
 - `ServerAliveInterval=30` sends a small keepalive through the encrypted connection every 30 seconds. That also stops idle connections from being silently dropped by a router or Wi-Fi power saving.
@@ -88,7 +88,7 @@ wc -c ~/ssi-platform/k8s/day-06-mcp.yaml
 shasum -a 256 ~/ssi-platform/k8s/day-06-mcp.yaml
 ```
 
-The file should be 44,859 bytes, with the SHA-256 hash `a69b9d17c8b79d6ad267e7de5d910b5c0b0a04104150852154561df9a2bbfc9a`. A different number means the paste was cut short or changed.
+The file should be 44,867 bytes, with the SHA-256 hash `719c294e84c8b64d48ad16f06b20c07b460529746b945b3ef8e806dcf8450215`. A different number means the paste was cut short or changed.
 
 The details worth calling out:
 
@@ -197,7 +197,7 @@ First, a firewall rule that opens port 3000 to my home subnet only:
 Lab host:
 
 ```bash
-sudo ufw allow from 192.0.2.0/24 to any port 3000 proto tcp
+sudo ufw allow from <lan-subnet> to any port 3000 proto tcp
 ```
 
 Then a port-forward bound to the lab host's LAN address instead of loopback, running in the background:
@@ -211,7 +211,7 @@ sudo -v
 Lab host:
 
 ```bash
-sudo nohup k3s kubectl -n si-lab port-forward --address 192.0.2.71 svc/open-webui 3000:8080 > /tmp/owui-pf.log 2>&1 &
+sudo nohup k3s kubectl -n si-lab port-forward --address <lab-lan-ip> svc/open-webui 3000:8080 > /tmp/owui-pf.log 2>&1 &
 ```
 
 - **`sudo -v`** asks for my password up front and caches it, so the backgrounded `sudo` in the next command doesn't stop to prompt for one.
@@ -252,7 +252,7 @@ In my words at the end of today: "Okay, let's finish this lab. I'll configure th
 
 ## What's next
 
-- **Day 6b, the monitoring node join:** add the monitoring node to the cluster as a CPU-only k3s agent, labeled and tainted for observability workloads, so the lab host keeps its RAM and GPU for the models.
+- **Day 6b, the obs-node join:** add the obs-node to the cluster as a CPU-only k3s agent, labeled and tainted for observability workloads, so the lab host keeps its RAM and GPU for the models.
 - **Day 7, observability:** Prometheus and Grafana for metrics, OpenTelemetry traces into Langfuse and Tempo, Loki for logs, and a Prompt Guard classifier, so every tool call, including `tools/call search_notes`, shows up as a trace.
 - **Day 8, ALM:** custom images instead of pip-at-start, the manifests in Git with a proper deploy flow, and permanent, secured access to Open WebUI instead of hand-started port-forwards.
 

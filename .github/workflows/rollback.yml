@@ -1,0 +1,39 @@
+name: Rollback Prod
+# Redeploy a previous release tag to si-lab (owner only), then smoke test.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to redeploy, for example v2026.10.10-1"
+        required: true
+      confirm:
+        description: "Type ROLLBACK to confirm"
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+jobs:
+  rollback:
+    runs-on: [self-hosted, si-lab]  # Prod runner si-lab-runner (user ghrunner)
+    environment:
+      name: prod
+    timeout-minutes: 20
+    steps:
+      - name: Gate
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "::error::Only $OWNER may roll back"; exit 1; }
+          [[ "$CONFIRM" == "ROLLBACK" ]] || { echo "::error::Type ROLLBACK to confirm"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - name: Redeploy
+        run: bash scripts/sdlc/deploy.sh prod "$(git rev-parse HEAD)"
+      - name: Smoke test
+        run: bash scripts/sdlc/smoke.sh prod "$(git rev-parse HEAD)"
+      - run: echo "Rolled Prod back to ${{ inputs.tag }} ($(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"

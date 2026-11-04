@@ -3,7 +3,7 @@
 
 Hand-laid-out SVG using real icons: official Kubernetes icons and k3s/PostgreSQL/Python/Helm
 logos (bundled with the mingrammer `diagrams` package), plus official vendor/project logos
-fetched by build_icons.py (Ollama, Open WebUI, NVIDIA, Meta, Nomic, Ubuntu) and generic device icons.
+fetched by build_icons.py (Ollama, Open WebUI, NVIDIA, Meta, Nomic, Apple, Dell, Ubuntu, WD).
 
     python build_icons.py      # once: fetch logos and compose icons into ./icons
     python homelab_diagram.py  # writes homelab-architecture.svg and .png (Day 5, the default)
@@ -173,10 +173,10 @@ header()
 
 # --- clusters (drawn back to front)
 cluster(30, 430, 362, 930, "Terminal", "kubectl + helm + browser only",
-        fill="#f2f7fe", stroke="#9dbbe6", ico="terminal_laptop.png", ico_size=40)
+        fill="#f2f7fe", stroke="#9dbbe6", ico="laptop_m1.png", ico_size=40)
 cluster(520, 175, 2460, 1790 + DY, "Lab host",
         "Ubuntu 26.04 LTS · k3s server" if TWO_NODES else "Ubuntu 26.04 LTS · single-node k3s",
-        fill="#fafbfc", stroke="#aab4bf", ico="labhost_laptop.png", ico_size=44, width=2.5)
+        fill="#fafbfc", stroke="#aab4bf", ico="dell_xps15.png", ico_size=44, width=2.5)
 cluster(690, 250, 2115, 1520 + DY, "k3s v1.36 · server node gpu-node (control plane)" if TWO_NODES else "k3s v1.36 · single node gpu-node",
         "secrets encryption on · Traefik disabled · API bound to 127.0.0.1:6443",
         fill="#fffaf0", stroke="#f0b429", ico=K8S["k3s"], ico_size=38, width=2.5)
@@ -195,10 +195,10 @@ cluster(560, 1545 + DY, 1805 + GX // 2 + (15 if GX else 0), 1772 + DY, "GPU stac
 # --- nodes
 node("browser", 110, 530, "browser.png", ["browser", "tailnet HTTPS"] if D8 else ["browser", "localhost:3000/3001/3002" if D7 else "http://127.0.0.1:3000"], 72)
 node("kubectl", 270, 610, "kubectl.png", ["kubectl"], 74)
-node("terminal", 110, 720, "terminal_laptop.png", ["terminal", "Tailscale"] if D8 else ["terminal"], 92)
+node("terminal", 110, 720, "laptop_m1.png", ["terminal", "Tailscale"] if D8 else ["terminal"], 92)
 node("helm", 270, 810, K8S["helm"], ["helm"], 74)
 node("ssh", 440, 690, "ssh_tunnel.png", ["SSH tunnel :6443", "over Tailscale" if D8 else "terminal → lab host"], 84)
-node("lab_host", 620, 690, "labhost_laptop.png", ["lab host", "sshd · Tailscale" if D8 else "sshd"], 90)
+node("lab_host", 620, 690, "dell_xps15.png", ["lab host", "sshd · Tailscale" if D8 else "sshd"], 90)
 node("api", 790, 690, K8S["api"], ["k3s API server", "127.0.0.1:6443"], 80)
 node("node_d", 760, 1420 + DY, K8S["node"], ["node gpu-node", "containerd +", "nvidia runtime"], 76)
 
@@ -228,10 +228,10 @@ node("pv_models", 1895, 1185, K8S["pv"], ["PV: Ollama models", "/mnt/ailab-data/
 node("sc_ext", 2050, 1095, K8S["sc"], ["StorageClass", "ailab-external"], 64)
 
 node("nvme", 2290, 845, "nvme_ssd.png", ["internal NVMe SSD", "local-path"], 120)
-node("wd", 2290, 1095, "usb_drive.png", ["external USB drive", "exFAT", "/mnt/ailab-data"], 96)
+node("wd", 2290, 1095, "wd_elements.png", ["external USB drive 4.6 TB", "exFAT", "/mnt/ailab-data"], 96)
 
 node("toolkit", 760, 1650 + DY, "nvidia_container_toolkit.png", ["NVIDIA Container Toolkit", "nvidia runtime → k3s containerd"], 128)
-node("gpu", 1580 + GX, 1650 + DY, "gpu_chip.png", ["NVIDIA laptop GPU", "4 GB VRAM · driver 595"], 92)
+node("gpu", 1580 + GX, 1650 + DY, "nvidia_rtx_gpu.png", ["NVIDIA NVIDIA laptop GPU", "4 GB VRAM · driver 595"], 92)
 
 # --- edges: access path (terminal -> tunnel -> API)
 a = C["access"]
@@ -342,7 +342,7 @@ if TWO_NODES:
     node("node_s", 3065, 1745, K8S["node"], ["node obs-node", "agent (worker)", "label ailab/role=observability",
          "taint ailab/role=observability:NoSchedule"], 76)
     node("kubelet_s", 2850, 1720, "k8s/controlplane/kubelet.png", ["kubelet", ":10250"], 56)
-    node("flannel_s", 2850, 1880, "flannel.png", ["flannel VXLAN", "Wi-Fi interface"], 52)
+    node("flannel_s", 2850, 1880, "flannel.png", ["flannel VXLAN", "wlp0s20f3"], 52)
     # node gpu-node's side of the node-to-node links, inside the k3s box
     node("kubelet_d", 1995, 1720, "k8s/controlplane/kubelet.png", ["kubelet (node gpu-node)", ":10250"], 56)
     node("flannel_d", 1995, 1880, "flannel.png", ["flannel VXLAN", "(node gpu-node)"], 52)

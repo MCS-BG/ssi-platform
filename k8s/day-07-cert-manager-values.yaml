@@ -1,20 +1,16 @@
+# Moved to node gpu-node with the observability stack: docs/observability-move.md.
 # Day 7 (stage B prerequisite): cert-manager, required by the ClickHouse operator's webhook,
 # which the Langfuse chart v2 uses to run ClickHouse. Pinned to the version in the langfuse-k8s README.
 # Install:
 #   helm upgrade -i cert-manager oci://quay.io/jetstack/charts/cert-manager --version v1.20.2 \
-#     -n cert-manager -f ~/ssi-platform/k8s/day-07-cert-manager-values.yaml
+#     -n cert-manager -f ~/ai-ops-homelab/k8s/day-07-cert-manager-values.yaml
 crds:
   enabled: true
 
 global:
   nodeSelector:
-    ailab/role: observability
+    kubernetes.io/hostname: gpu-node
 
-tolerations: &obs-node
-  - key: ailab/role
-    operator: Equal
-    value: observability
-    effect: NoSchedule
 resources:
   requests:
     cpu: 10m
@@ -25,7 +21,6 @@ prometheus:
   enabled: false
 
 webhook:
-  tolerations: *obs-node
   resources:
     requests:
       cpu: 10m
@@ -34,7 +29,6 @@ webhook:
       memory: 96Mi
 
 cainjector:
-  tolerations: *obs-node
   resources:
     requests:
       cpu: 10m
@@ -42,5 +36,3 @@ cainjector:
     limits:
       memory: 192Mi
 
-startupapicheck:
-  tolerations: *obs-node

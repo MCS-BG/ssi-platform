@@ -5,7 +5,7 @@
 # of the Day 8a images, and keeping it unchanged means it tests the new server exactly like Day 6.
 # Re-run:
 #   kubectl -n si-lab delete job mcp-test --ignore-not-found
-#   kubectl apply -f ~/ssi-platform/k8s/day-08a-mcp-test.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-08a-mcp-test.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:

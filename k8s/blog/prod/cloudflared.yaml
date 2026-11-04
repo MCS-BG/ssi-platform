@@ -1,0 +1,54 @@
+# Cloudflare Tunnel connector (remotely managed tunnel). Outbound only: no router ports open.
+# Secret blog-cloudflared (key: token) is created by scripts/blog/secrets.sh from the token
+# the operator copies out of the Cloudflare dashboard. Public hostname blog.example.com -> http://ghost:2368
+# is set in the dashboard, so this connector can reach only Ghost (see NetworkPolicy below).
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cloudflared}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: cloudflared}}
+  template:
+    metadata: {labels: {app: cloudflared}}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: cloudflared
+          image: docker.io/cloudflare/cloudflared:2026.10.0
+          args: [tunnel, --no-autoupdate, --metrics, 0.0.0.0:2000, run]
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom: {secretKeyRef: {name: blog-cloudflared, key: token}}
+          livenessProbe:
+            httpGet: {path: /ready, port: 2000}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: cloudflared}
+spec:
+  podSelector: {matchLabels: {app: cloudflared}}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to: [{podSelector: {matchLabels: {app: ghost}}}]
+      ports: [{protocol: TCP, port: 2368}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8]
+      ports: [{protocol: TCP, port: 7844}, {protocol: UDP, port: 7844}, {protocol: TCP, port: 443}]

@@ -1,0 +1,29 @@
+name: Bug card
+description: Something in staging or Prod behaves wrongly
+title: "[bug] "
+labels: ["type/bug"]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed
+      description: What happened (paste the request and response, no secrets).
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations: {required: true}
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where
+      options: [Prod (si-lab), Staging (si-staging), Local]
+    validations: {required: true}
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ] A test reproduces the bug and now passes
+        - [ ] Smoke test passes in staging and Prod

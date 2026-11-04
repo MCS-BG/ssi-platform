@@ -25,6 +25,7 @@ ssi-platform-*.tar.gz
 
 # Python and tooling
 __pycache__/
+.pytest_cache/
 *.pyc
 .venv/
 venv/

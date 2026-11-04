@@ -7,7 +7,7 @@ By the end of the night I had Ollama running as a Kubernetes Deployment in `si-l
 ## The lab at a glance
 
 - **My terminal:** where I edit manifests and run `kubectl`. The Kubernetes API reaches it through an SSH tunnel on port 6443.
-- **Lab host:** Ubuntu 26.04 running single-node k3s `v1.36.4+k3s1`, with secrets encryption on and Traefik disabled. The GPU is an NVIDIA laptop GPU with 4 GB of video memory, on driver 595.91.07 with CUDA 13.2. The NVIDIA Container Toolkit, the `nvidia` runtime class, and the NVIDIA device plugin were all set up on day 2.
+- **Lab host:** Ubuntu 26.04 running single-node k3s `v1.36.4+k3s1`, with secrets encryption on and Traefik disabled. The GPU is an NVIDIA GeForce NVIDIA laptop GPU with 4 GB of video memory, on driver 595.91.07 with CUDA 13.2. The NVIDIA Container Toolkit, the `nvidia` runtime class, and the NVIDIA device plugin were all set up on day 2.
 - **External drive:** a USB drive formatted exFAT and mounted at `/mnt/ailab-data`. Model files go in `/mnt/ailab-data/ai-ops-homelab/ollama`. Container images stay on the internal NVMe drive.
 
 Placeholders used below: `labuser` is the SSH user on the lab host, `<lab-lan-ip>` is its address on my home network, `labnode` is the Kubernetes node name, and `~/.kube/k3s-lab.yaml` is the kubeconfig on my terminal.

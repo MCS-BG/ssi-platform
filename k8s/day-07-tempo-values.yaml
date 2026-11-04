@@ -1,10 +1,11 @@
-# Day 7 (stage C): Tempo 3 monolithic on the monitoring node, local-disk backend, 48h retention.
+# Day 7 (stage C): Tempo 3 monolithic on the obs-node, local-disk backend, 48h retention.
+# Moved to node gpu-node with data on /srv/observability: docs/observability-move.md.
 # Receives traces from the OpenTelemetry Collector over OTLP gRPC (4317). Grafana queries port 3200.
 # Chart: grafana-community/tempo 3.0.0 (Tempo 3.0.3). Fallback if 3.x misbehaves:
 #   grafana-community/tempo 2.4.0 (Tempo 2.10.8) with the same keys minus liveStore.
 # Install:
 #   helm upgrade -i tempo grafana-community/tempo --version 3.0.0 \
-#     -n monitoring -f ~/ssi-platform/k8s/day-07-tempo-values.yaml
+#     -n monitoring -f ~/ai-ops-homelab/k8s/day-07-tempo-values.yaml
 replicas: 1
 
 tempo:
@@ -35,9 +36,4 @@ persistence:
   storageClassName: local-path
 
 nodeSelector:
-  ailab/role: observability
-tolerations:
-  - key: ailab/role
-    operator: Equal
-    value: observability
-    effect: NoSchedule
+  kubernetes.io/hostname: gpu-node

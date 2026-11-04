@@ -20,4 +20,4 @@ Enterprise base URL for SSI Connector:
 Quiet observability: Grafana + Langfuse remain the obs lane (or Azure Monitor + Langfuse).
 MCP slots (business / engineering / productivity) do not peer — cross-share only via control-layer loop state.
 Conversation memory (memory.enabled={{ .Values.memory.enabled }}): POST /control/ask with a conversation_id; GET or DELETE /control/conversations/<id>.
-The home-lab VPN path is lab-only; not part of the product/enterprise story.
+Tailscale is home-lab only; not part of the product/enterprise story.

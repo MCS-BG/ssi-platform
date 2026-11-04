@@ -1,9 +1,10 @@
-# Day 7 (stage A): kube-prometheus-stack sized for the monitoring node (8 GB RAM assumed).
+# Day 7 (stage A): kube-prometheus-stack sized for the obs-node (8 GB RAM assumed).
+# Moved to node gpu-node with data on /srv/observability: docs/observability-move.md.
 # Chart: prometheus-community/kube-prometheus-stack 91.5.3 (operator v0.94.1, Grafana subchart 13.2.5)
 # Install:
 #   helm upgrade -i kps prometheus-community/kube-prometheus-stack --version 91.5.3 \
-#     -n monitoring -f ~/ssi-platform/k8s/day-07-kube-prometheus-stack-values.yaml
-# Everything except node-exporter is pinned to the monitoring node (label + toleration below).
+#     -n monitoring -f ~/ai-ops-homelab/k8s/day-07-kube-prometheus-stack-values.yaml
+# Everything except node-exporter is pinned to node gpu-node (nodeSelector below).
 # node-exporter is a DaemonSet in monitoring-host so it covers both nodes.
 fullnameOverride: kps
 
@@ -35,12 +36,7 @@ alertmanager:
 
 prometheusOperator:
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
   resources:
     requests:
       cpu: 20m
@@ -50,22 +46,12 @@ prometheusOperator:
   admissionWebhooks:
     patch:
       nodeSelector:
-        ailab/role: observability
-      tolerations:
-        - key: ailab/role
-          operator: Equal
-          value: observability
-          effect: NoSchedule
+        kubernetes.io/hostname: gpu-node
 
 prometheus:
   prometheusSpec:
     nodeSelector:
-      ailab/role: observability
-    tolerations:
-      - key: ailab/role
-        operator: Equal
-        value: observability
-        effect: NoSchedule
+      kubernetes.io/hostname: gpu-node
     scrapeInterval: 30s
     evaluationInterval: 30s
     retention: 3d
@@ -93,12 +79,7 @@ prometheus:
 
 kube-state-metrics:
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
   resources:
     requests:
       cpu: 10m
@@ -111,6 +92,15 @@ kube-state-metrics:
 # The subchart already tolerates every NoSchedule taint, so it runs on both nodes.
 prometheus-node-exporter:
   namespaceOverride: monitoring-host
+  # obs-node offload: keep node-exporter off any node labeled ailab/role
+  # (the obs-node). Remove this affinity to put it back.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: ailab/role
+                operator: DoesNotExist
   resources:
     requests:
       cpu: 10m
@@ -120,12 +110,7 @@ prometheus-node-exporter:
 
 grafana:
   nodeSelector:
-    ailab/role: observability
-  tolerations:
-    - key: ailab/role
-      operator: Equal
-      value: observability
-      effect: NoSchedule
+    kubernetes.io/hostname: gpu-node
   # Admin credentials come from a Secret you create first (never the chart default).
   admin:
     existingSecret: grafana-admin

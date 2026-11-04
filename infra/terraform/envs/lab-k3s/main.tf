@@ -32,11 +32,11 @@ module "apps" {
   # Home-lab only private access.
   enable_tailscale_ingress = true
 
-  # SSI Connector endpoint on the home LAN: http://192.0.2.93:30808 (lab host IP
+  # SSI Connector endpoint on the home LAN: http://<lab-lan-ip>:30808 (lab host IP
   # reserved in the router). Cloud envs keep ClusterIP + the internal load balancer.
   gateway_service_type = "NodePort"
   gateway_node_port    = 30808
-  gateway_lan_cidr     = "192.0.2.0/24"
+  gateway_lan_cidr     = "<lan-subnet>"
 
   # Langfuse values passed with --set on Day 8b, and the headless-init project
   # ID the lab was initialised with before the si-lab rename.

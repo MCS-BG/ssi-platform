@@ -1,0 +1,122 @@
+# Forgejo Helm values for the lab (official chart, pinned):
+#   chart:  oci://code.forgejo.org/forgejo-helm/forgejo  version 17.2.0 (released 2026-10-05)
+#   app:    Forgejo 15.0.9, the chart's appVersion (rootless image)
+# Source: https://code.forgejo.org/forgejo-helm/forgejo-helm/releases (v17.2.0, Chart.yaml
+# appVersion 15.0.9). Install: docs/forgejo.md, "Deploy".
+# No secrets here: admin and DB credentials come from Secrets created on the lab host.
+image:
+  registry: code.forgejo.org
+  repository: forgejo/forgejo
+  tag: "15.0.9"
+  rootless: true
+
+replicaCount: 1
+strategy:
+  type: Recreate          # one RWO volume; never two pods writing the same repos
+
+nodeSelector:
+  kubernetes.io/hostname: gpu-node
+
+podSecurityContext:
+  fsGroup: 1000
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  seccompProfile: {type: RuntimeDefault}
+
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 1Gi}
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+
+persistence:
+  enabled: true
+  create: false
+  mount: true
+  claimName: forgejo-data
+
+service:
+  http:
+    type: ClusterIP
+    port: 3000
+  ssh:
+    # SSH clone over the tailnet: the Tailscale operator exposes this Service as its own
+    # tailnet machine "git-ssh" (one hostname per proxy, so web and SSH are separate).
+    type: LoadBalancer
+    loadBalancerClass: tailscale
+    port: 22
+    annotations:
+      tailscale.com/hostname: git-ssh
+
+ingress:
+  enabled: true
+  className: tailscale
+  hosts:
+    - host: git.<tailnet>.ts.net   # the tailnet name; tls.hosts sets the machine name
+      paths:
+        - {path: /, pathType: Prefix, port: http}
+  tls:
+    - hosts: [git]
+
+gitea:
+  admin:
+    existingSecret: forgejo-admin        # keys: username, password (created on the lab host)
+    email: "admin@git.invalid"
+    passwordMode: initialOnlyRequireReset
+  additionalConfigFromEnvs:
+    - name: FORGEJO__DATABASE__PASSWD
+      valueFrom: {secretKeyRef: {name: forgejo-db, key: password}}
+  config:
+    APP_NAME: "SI Git"
+    server:
+      DOMAIN: git.<tailnet>.ts.net
+      ROOT_URL: https://git.<tailnet>.ts.net/
+      SSH_DOMAIN: git-ssh.<tailnet>.ts.net
+      SSH_PORT: 22
+      SSH_LISTEN_PORT: 2222
+      LFS_START_SERVER: true
+    database:
+      DB_TYPE: postgres
+      HOST: forgejo-postgres:5432
+      NAME: forgejo
+      USER: forgejo
+      SSL_MODE: disable           # in-namespace only, behind NetworkPolicy
+    service:
+      DISABLE_REGISTRATION: true
+      REQUIRE_SIGNIN_VIEW: true
+      DEFAULT_KEEP_EMAIL_PRIVATE: true
+    repository:
+      DEFAULT_PRIVATE: private
+      DEFAULT_BRANCH: main
+    security:
+      INSTALL_LOCK: true
+      MIN_PASSWORD_LENGTH: 14
+    migrations:
+      ALLOWED_DOMAINS: github.com,*.github.com,api.github.com,codeload.github.com
+      ALLOW_LOCALNETWORKS: false
+    actions:
+      ENABLED: true
+      DEFAULT_ACTIONS_URL: https://code.forgejo.org
+    session:
+      PROVIDER: db
+    cache:
+      ADAPTER: memory
+    queue:
+      TYPE: level
+    indexer:
+      ISSUE_INDEXER_TYPE: bleve
+      REPO_INDEXER_ENABLED: false
+    mailer:
+      ENABLED: false
+    cron.update_checker:
+      ENABLED: false
+
+test:
+  enabled: false

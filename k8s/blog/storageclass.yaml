@@ -1,0 +1,8 @@
+# Shared no-provisioner class for the blog's static PVs (prod and staging). Apply once:
+#   sudo k3s kubectl apply -f k8s/blog/storageclass.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: {name: blog-static}
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain

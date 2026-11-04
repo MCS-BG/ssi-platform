@@ -189,6 +189,11 @@ module "apps" {
   langfuse_admin_email     = lookup(var.app_secrets, "langfuse_admin_email", null)
   langfuse_admin_password  = lookup(var.app_secrets, "langfuse_admin_password", null)
   hf_token                 = lookup(var.app_secrets, "hf_token", null)
+  github_token             = lookup(var.app_secrets, "github_token", null)
+
+  # Day 14-16 switches
+  enable_engineering_mcp_github = var.enable_engineering_mcp_github
+  enable_m365_mcp               = var.enable_m365_mcp
 
   depends_on = [google_container_node_pool.default]
 }

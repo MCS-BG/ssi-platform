@@ -3,9 +3,9 @@
 # ask.py / ingest.py are then run through opentelemetry-instrument with kubectl exec; the
 # requests (Ollama embed/generate) and psycopg (pgvector) calls become spans.
 # The nodeSelector pins the worker to the lab host, because its notes volume is a hostPath PV
-# on /mnt/ailab-data (the monitoring node taint already keeps it off the monitoring node; this makes it explicit).
+# on /mnt/ailab-data (the obs-node taint already keeps it off the obs-node; this makes it explicit).
 # Apply:
-#   kubectl -n si-lab patch deployment rag-worker --patch-file ~/ssi-platform/k8s/day-07-rag-worker-otel-patch.yaml
+#   kubectl -n si-lab patch deployment rag-worker --patch-file ~/ai-ops-homelab/k8s/day-07-rag-worker-otel-patch.yaml
 spec:
   template:
     spec:

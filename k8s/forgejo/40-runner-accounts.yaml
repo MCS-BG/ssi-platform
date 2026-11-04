@@ -1,0 +1,40 @@
+# Cluster accounts for the Forgejo Actions runners, mirroring the GitHub runner isolation.
+# They reuse the existing per-stage Roles (k8s/sdlc): no new rights are defined here.
+#   forgejo-staging-deployer (si-staging) -> Role sdlc-staging-deployer, si-staging only
+#   forgejo-deployer (si-lab)             -> Role sdlc-deployer, si-lab only
+# Neither can exec, port-forward, read Secrets, or delete. Apply at cutover step 3.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: forgejo-staging-deployer, namespace: si-staging}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: forgejo-staging-deployer-token
+  namespace: si-staging
+  annotations: {kubernetes.io/service-account.name: forgejo-staging-deployer}
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: forgejo-staging-deployer, namespace: si-staging}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sdlc-staging-deployer}
+subjects: [{kind: ServiceAccount, name: forgejo-staging-deployer, namespace: si-staging}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: forgejo-deployer, namespace: si-lab}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: forgejo-deployer-token
+  namespace: si-lab
+  annotations: {kubernetes.io/service-account.name: forgejo-deployer}
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: forgejo-deployer, namespace: si-lab}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: sdlc-deployer}
+subjects: [{kind: ServiceAccount, name: forgejo-deployer, namespace: si-lab}]

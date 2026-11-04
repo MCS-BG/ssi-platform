@@ -3,11 +3,11 @@
 #   starlette/requests/psycopg instrumentations (pinned; 1.44.0 / 0.65b0)
 # - the server starts through opentelemetry-instrument, which wraps the Starlette app
 #   (HTTP server spans for POST /mcp), outgoing requests calls (Ollama, fo-mock) and psycopg
-#   queries (pgvector), and exports traces + metrics to the collector on the monitoring node.
+#   queries (pgvector), and exports traces + metrics to the collector on the obs-node.
 # /healthz is excluded so probes do not create spans.
 # Apply:
-#   kubectl -n si-lab patch deployment mcp-server --patch-file ~/ssi-platform/k8s/day-07-mcp-server-otel-patch.yaml
-# Undo: kubectl -n si-lab apply -f ~/ssi-platform/k8s/day-06-mcp.yaml
+#   kubectl -n si-lab patch deployment mcp-server --patch-file ~/ai-ops-homelab/k8s/day-07-mcp-server-otel-patch.yaml
+# Undo: kubectl -n si-lab apply -f ~/ai-ops-homelab/k8s/day-06-mcp.yaml
 spec:
   template:
     spec:

@@ -1,0 +1,30 @@
+name: Feature card
+description: A small, shippable change (aim for less than one day from Ready to Prod)
+title: "[feature] "
+labels: ["type/feature"]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What the user or customer can do after this ships.
+    validations: {required: true}
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checks that prove it works, in staging and in Prod.
+      value: |
+        - [ ] 
+    validations: {required: true}
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [ssi-langgraph, control-layer, m365-mcp, engineering-mcp, platform/k8s, docs]
+    validations: {required: true}
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback plan
+      value: Rollback Prod workflow to the previous release tag.

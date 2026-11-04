@@ -218,7 +218,7 @@ variable "gateway_node_port" {
 }
 
 variable "gateway_lan_cidr" {
-  description = "Home LAN range allowed through the ssi-gateway NetworkPolicy to the NodePort (lab: 192.0.2.0/24). Empty = none (cloud)."
+  description = "Home LAN range allowed through the ssi-gateway NetworkPolicy to the NodePort (lab: <lan-subnet>). Empty = none (cloud)."
   type        = string
   default     = ""
 }
@@ -439,7 +439,7 @@ variable "use_host_path_volumes" {
 }
 
 variable "storage_class_name" {
-  description = "StorageClass for the Ollama and RAG PVCs when use_host_path_volumes = false. null = cluster default."
+  description = "StorageClass for the app PVCs (Ollama, RAG, Open WebUI, Prompt Guard, pgvector) when use_host_path_volumes = false. null = cluster default (pgvector keeps its manifest class)."
   type        = string
   default     = null
 }

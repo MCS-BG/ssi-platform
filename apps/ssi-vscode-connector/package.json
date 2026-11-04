@@ -3,7 +3,7 @@
   "displayName": "SSI Connector",
   "description": "Connect VS Code and Cursor to your company's private SSI (Sovereign Super Intelligence) control layer and its business and engineering MCP gateways.",
   "version": "0.1.0",
-  "publisher": "ssi-lab",
+  "publisher": "blackbeardco",
   "license": "MIT",
   "icon": "media/icon.png",
   "repository": {

@@ -807,7 +807,134 @@ def compact_evidence(tool_hops: list[dict[str, Any]], max_chars: int = EVIDENCE_
     return "\n".join(lines)[:max_chars + 200]
 
 
-def synthesize(question: str, tool_hops: list[dict[str, Any]], memory_text: str = "") -> tuple[str, dict[str, Any]]:
+# ---------------------------------------------------------------------------
+# Day 18: deterministic grounding. When every tool failed, or every tool came back
+# empty, the reply is written here, not by the model, so a small model cannot turn
+# "error" or "[]" into a made-up fact. Mixed turns still go to the model, with a note.
+# ---------------------------------------------------------------------------
+TOOL_TOPICS = {
+    "m365_list_events": ("your calendar", "No meetings found in the next {days} days."),
+    "m365_list_mail": ("your mail", "No messages found."),
+    "m365_get_mail": ("that message", "That message was not found."),
+    "m365_list_onedrive": ("your OneDrive", "No files found in that OneDrive folder."),
+    "m365_search_onedrive": ("your OneDrive", "No OneDrive files matched."),
+    "list_prs": ("pull requests", "No {state} pull requests found."),
+    "list_issues": ("issues", "No {state} issues found."),
+    "list_commits": ("commits", "No commits found."),
+    "list_repos": ("repositories", "No repositories found."),
+    "fo_query": ("the business system", "No matching records found in the business system."),
+    "search_notes": ("the lab notes", "No matching notes found."),
+}
+_SECRETISH = re.compile(r"(?i)(bearer\s+\S+|gh[pousr]_\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+|(token|secret|password|key)\s*[=:]\s*\S+)")
+
+
+def hop_error(result: Any) -> str | None:
+    if isinstance(result, dict) and result.get("error") and len([k for k in result if k != "source"]) <= 2:
+        return str(result["error"])
+    return None
+
+
+def hop_is_empty(result: Any) -> bool:
+    if result is None or result == [] or result == {}:
+        return True
+    if isinstance(result, list):
+        return len(result) == 0
+    if isinstance(result, dict):
+        if hop_error(result):
+            return False
+        lists = [v for k, v in result.items() if isinstance(v, list) and k not in ("withheld", "warnings")]
+        if lists:
+            return all(len(v) == 0 for v in lists)
+        if result.get("returned") == 0:
+            return True
+    return False
+
+
+def error_reason(msg: str) -> str:
+    """Short plain-English reason; never echoes tokens or long server text."""
+    m = _SECRETISH.sub("[redacted]", msg or "")
+    low = m.lower()
+    src = "Microsoft Graph" if "graph" in low else "GitHub" if "github" in low else "the tool"
+    if "timezone" in low or "time zone" in low:
+        why = "timezone not supported"
+    elif "401" in low or "sign in" in low or "signed in" in low or "token" in low:
+        why = "not signed in or the sign-in expired"
+    elif "403" in low or "denied" in low or "forbidden" in low:
+        why = "access denied"
+    elif "404" in low or "not found" in low:
+        why = "not found"
+    elif "429" in low or "rate limit" in low:
+        why = "rate limited, try again shortly"
+    elif "unreachable" in low or "timed out" in low or "timeout" in low or "unavailable" in low:
+        why = "service unreachable"
+    else:
+        why = "request rejected"
+    verb = "returned an error" if src != "the tool" or why != "service unreachable" else "was unreachable"
+    return f"{src} {verb} ({why})"
+
+
+def _empty_sentence(hop: dict[str, Any]) -> str:
+    name = hop.get("name") or ""
+    args = hop.get("arguments") or {}
+    _, tmpl = TOOL_TOPICS.get(name, (name, "No results found from " + name + "."))
+    out = tmpl.format(days=args.get("days", 7), state=args.get("state", "open"))
+    return out.replace("No all ", "No ").replace("  ", " ")
+
+
+def grounding_rule(tool_hops: list[dict[str, Any]]) -> dict[str, Any]:
+    """{"rule": "all_errors"|"empty"|"none", ...}. "mixed" detail rides in failed/empty."""
+    if not tool_hops:
+        return {"rule": "none"}
+    failed = [h for h in tool_hops if hop_error(h.get("result"))]
+    empty = [h for h in tool_hops if hop_is_empty(h.get("result"))]
+    names = lambda hs: [f"{h.get('slot')}.{h.get('name')}" for h in hs]  # noqa: E731
+    if len(failed) == len(tool_hops):
+        return {"rule": "all_errors", "failed": names(failed)}
+    if len(failed) + len(empty) == len(tool_hops) and empty:
+        return {"rule": "empty", "failed": names(failed), "empty": names(empty)}
+    if failed or empty:
+        return {"rule": "none", "mixed": True, "failed": names(failed), "empty": names(empty)}
+    return {"rule": "none"}
+
+
+def deterministic_answer(tool_hops: list[dict[str, Any]]) -> str:
+    parts = []
+    for h in tool_hops:
+        err = hop_error(h.get("result"))
+        if err:
+            topic = TOOL_TOPICS.get(h.get("name") or "", (h.get("name") or "that tool", ""))[0]
+            parts.append(f"I couldn't read {topic}: {error_reason(err)}.")
+        else:
+            parts.append(_empty_sentence(h))
+    seen: list[str] = []
+    for p_ in parts:
+        if p_ not in seen:
+            seen.append(p_)
+    return " ".join(seen)
+
+
+def grounding_note(g: dict[str, Any]) -> str:
+    bits = []
+    if g.get("failed"):
+        bits.append("These tools FAILED and returned no data: " + ", ".join(g["failed"]) + ".")
+    if g.get("empty"):
+        bits.append("These tools returned NO results: " + ", ".join(g["empty"]) + ".")
+    if not bits:
+        return ""
+    return ("Note: " + " ".join(bits) + " Say so plainly for those; do not invent data for them. "
+            "Any count you give must match the tool results.\n")
+
+
+def grounded_answer(question: str, tool_hops: list[dict[str, Any]], memory_text: str = "") -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Day 18 wrapper around synthesize: returns (answer, usage, grounding)."""
+    g = grounding_rule(tool_hops)
+    if g["rule"] in ("all_errors", "empty"):
+        return deterministic_answer(tool_hops), {"prompt_eval_count": 0, "eval_count": 0}, g
+    answer, usage = synthesize(question, tool_hops, memory_text, note=grounding_note(g))
+    return answer, usage, g
+
+
+def synthesize(question: str, tool_hops: list[dict[str, Any]], memory_text: str = "", note: str = "") -> tuple[str, dict[str, Any]]:
     evidence = compact_evidence(tool_hops)
     if memory_text:
         prompt = (
@@ -817,6 +944,7 @@ def synthesize(question: str, tool_hops: list[dict[str, Any]], memory_text: str 
             f"Earlier in this conversation (oldest first):\n{memory_text}\n\n"
             f"Question: {question}\n"
             f"Tool results:\n{evidence}\n"
+            f"{note}"
             "Answer:"
         )
     else:
@@ -824,6 +952,7 @@ def synthesize(question: str, tool_hops: list[dict[str, Any]], memory_text: str 
             "Answer the question using ONLY the tool results. Be concise (3-6 sentences).\n"
             f"Question: {question}\n"
             f"Tool results:\n{evidence}\n"
+            f"{note}"
             "Answer:"
         )
     gen = ollama_generate(prompt, num_predict=min(256, MAX_TOKENS))
@@ -1208,7 +1337,7 @@ def run_model_planner(
             result = run_step(plain, model_chosen=True)
             hops.append({**plain, "result": result})
             messages.append(_tool_message(step, result))
-    answer, usage = synthesize(question, hops, memory_text)
+    answer, usage, grounding = grounded_answer(question, hops, memory_text)
     tokens += int(usage.get("eval_count") or 0) + int(usage.get("prompt_eval_count") or 0)
     return {
         "ok": True,
@@ -1219,6 +1348,7 @@ def run_model_planner(
         "tool_calls": hops,
         "slots_used": sorted({h["slot"] for h in hops}),
         "answer": answer,
+        "grounding": grounding,
         "model": active_model(),
         "usage": usage,
         "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens},
@@ -1250,7 +1380,7 @@ def run_demo(question: str | None = None) -> dict[str, Any]:
             break
         result = run_step(step)
         hops.append({**step, "result": result})
-    answer, usage = synthesize(q, hops)
+    answer, usage, grounding = grounded_answer(q, hops)
     return {
         "ok": True,
         "mode": "demo",
@@ -1259,6 +1389,7 @@ def run_demo(question: str | None = None) -> dict[str, Any]:
         "tool_calls": hops,
         "slots_used": sorted({h["slot"] for h in hops}),
         "answer": answer,
+        "grounding": grounding,
         "model": active_model(),
         "usage": usage,
         "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},
@@ -1344,7 +1475,7 @@ def _run_ask_loop(
                 }
             result = run_step(step)
             hops.append({**step, "result": result})
-        answer, usage = synthesize(question, hops, memory_text)
+        answer, usage, grounding = grounded_answer(question, hops, memory_text)
         tokens_used += int(usage.get("eval_count") or 0) + int(usage.get("prompt_eval_count") or 0)
         return {
             "ok": True,
@@ -1355,6 +1486,7 @@ def _run_ask_loop(
             "tool_calls": hops,
             "slots_used": sorted({h["slot"] for h in hops}),
             "answer": answer,
+            "grounding": grounding,
             "model": active_model(),
             "usage": usage,
             "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
@@ -1379,6 +1511,9 @@ def _run_ask_loop(
         tokens_used += int(gen.get("eval_count") or 0) + int(gen.get("prompt_eval_count") or 0)
         kind, payload = parse_model_line(gen.get("response") or "")
         if kind == "final":
+            grounding = grounding_rule(hops)
+            if grounding["rule"] in ("all_errors", "empty"):
+                payload = deterministic_answer(hops)
             return {
                 "ok": True,
                 "mode": "ask-model",
@@ -1387,6 +1522,7 @@ def _run_ask_loop(
                 "tool_calls": hops,
                 "slots_used": sorted({h["slot"] for h in hops}),
                 "answer": payload,
+                "grounding": grounding,
                 "model": active_model(),
                 "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops), "tokens_seen": tokens_used},
             }
@@ -1404,7 +1540,7 @@ def _run_ask_loop(
         hops.append({**step, "result": result})
         history += f"TOOL {step['slot']}.{step['name']} -> {json.dumps(result)[:800]}\n"
 
-    answer, usage = synthesize(question, hops, memory_text)
+    answer, usage, grounding = grounded_answer(question, hops, memory_text)
     return {
         "ok": True,
         "mode": "ask-model",
@@ -1413,6 +1549,7 @@ def _run_ask_loop(
         "tool_calls": hops,
         "slots_used": sorted({h["slot"] for h in hops}),
         "answer": answer,
+        "grounding": grounding,
         "model": active_model(),
         "usage": usage,
         "budgets": {"max_tool_calls": MAX_TOOL_CALLS, "max_tokens": MAX_TOKENS, "tool_calls_used": len(hops)},

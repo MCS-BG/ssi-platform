@@ -1,0 +1,8 @@
+# Used by BuildKit for apps/ssi-langgraph/Dockerfile (the build context is the repository root).
+# Send only the files the image needs.
+*
+!apps/control-layer/server.py
+!apps/ssi-langgraph/requirements.txt
+!apps/ssi-langgraph/cl_bridge.py
+!apps/ssi-langgraph/graph.py
+!apps/ssi-langgraph/server.py

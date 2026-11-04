@@ -1,0 +1,33 @@
+# Forgejo port of .github/workflows/cd-staging.yml: on merge to main, CI again, deploy to
+# si-staging, smoke test, then mark the commit with status si/staging=success (the Prod gate
+# reads it) and label the PR's cards stage/staging.
+name: CD Staging
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  deploy:
+    name: CI, deploy si-staging, smoke
+    runs-on: si-lab-staging
+    timeout-minutes: 30
+    env:
+      FORGEJO_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: CI gates
+        run: |
+          python3 -m venv .venv && . .venv/bin/activate
+          pip install -q --upgrade pip pytest pyyaml
+          pip install -q --no-deps -r apps/ssi-langgraph/requirements.txt
+          pip install -q -r apps/m365-mcp/requirements.txt
+          bash scripts/sdlc/ci.sh
+      - name: Deploy
+        run: bash scripts/sdlc/deploy.sh staging "$GITHUB_SHA"
+      - name: Smoke test
+        run: bash scripts/sdlc/smoke.sh staging "$GITHUB_SHA"
+      - name: Mark staging passed
+        run: python3 scripts/forgejo/forge.py status-set "$GITHUB_SHA" si/staging success "si-staging deploy and smoke test passed"
+      - name: Cards to Staging
+        run: python3 scripts/forgejo/forge.py cards "$GITHUB_SHA" stage/staging

@@ -3,7 +3,7 @@
 # ClickHouse operator, the Prometheus operator or their webhooks, so the API server can still
 # reach them. kubectl port-forward (Grafana, Langfuse UI) is not affected by NetworkPolicy.
 # Apply stage by stage; policies for components you have not installed yet are harmless.
-#   kubectl apply -f ~/ssi-platform/k8s/day-07-netpol.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-07-netpol.yaml
 ---
 # OTLP gateway: apps in si-lab and anything in monitoring may send OTLP; only monitoring may scrape 8888.
 apiVersion: networking.k8s.io/v1

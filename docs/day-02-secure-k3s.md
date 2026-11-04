@@ -7,7 +7,7 @@ By the end of the night I had a single-node k3s cluster that exposes nothing new
 ## The lab at a glance
 
 - **Workstation:** my laptop, where I edit code and run `kubectl` and `helm`.
-- **Lab host:** an Ubuntu laptop with an NVIDIA laptop GPU (4 GB of video memory). This runs k3s.
+- **Lab host:** an Ubuntu laptop with an NVIDIA GeForce NVIDIA laptop GPU (4 GB of video memory). This runs k3s.
 - **External drive:** a large USB drive on the lab host, used only for model weights and caches.
 
 Placeholders used below: `labuser` is the SSH user on the lab host, `<lab-lan-ip>` is its address on my home network, and `labnode` is the Kubernetes node name.

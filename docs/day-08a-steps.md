@@ -6,8 +6,8 @@ How to read these steps:
 
 - Every code block has a label above it that says where to run it: **Terminal** (the laptop you run `kubectl`, `helm`, `git` and `gh` from) or **Lab host**.
 - Each block holds one command. Run them in order and compare what you see with the expected output.
-- Terminal commands that use `kubectl` need `KUBECONFIG=~/.kube/si-lab.yaml` and the SSH tunnel to the API running in its own tab, as on Day 2. "Before you start" sets both up.
-- The repo is published under the MIT license: short, permissive, widely understood, and fine for a learning lab. It lets anyone reuse the manifests and code as long as they keep the notice. The `LICENSE` file credits "The SSI contributors", so no personal name ends up in it.
+- Terminal commands that use `kubectl` need `KUBECONFIG=~/.kube/k3s-lab.yaml` and the SSH tunnel to the API running in its own tab, as on Day 2. "Before you start" sets both up.
+- The repo is published under the MIT license: short, permissive, widely understood, and fine for a learning lab. It lets anyone reuse the manifests and code as long as they keep the notice. The `LICENSE` file credits "The ssi-platform contributors", so no personal name ends up in it.
 
 ## What changes today
 
@@ -66,7 +66,7 @@ In a second tab, point `kubectl` at the lab cluster.
 Terminal
 
 ```bash
-export KUBECONFIG=~/.kube/si-lab.yaml
+export KUBECONFIG=~/.kube/k3s-lab.yaml
 ```
 
 Expected output: nothing.

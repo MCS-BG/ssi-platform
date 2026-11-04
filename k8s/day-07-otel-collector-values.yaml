@@ -1,4 +1,5 @@
-# Day 7: OpenTelemetry Collector "gateway" (one Deployment on the monitoring node).
+# Day 7: OpenTelemetry Collector "gateway" (one Deployment on the obs-node).
+# Moved to node gpu-node with data on /srv/observability: docs/observability-move.md.
 # Chart: open-telemetry/opentelemetry-collector 0.173.1 (collector 0.160.0), image otelcol-k8s.
 # Apps in si-lab send OTLP to http://otel-collector.monitoring.svc.cluster.local:4318 (HTTP)
 # or :4317 (gRPC). The collector fans out:
@@ -9,7 +10,7 @@
 # Stages B and C swap the pipelines with the small overlay files day-07-otel-collector-stage-*.yaml.
 # Install (stage A):
 #   helm upgrade -i otel-collector open-telemetry/opentelemetry-collector --version 0.173.1 \
-#     -n monitoring -f ~/ssi-platform/k8s/day-07-otel-collector-values.yaml
+#     -n monitoring -f ~/ai-ops-homelab/k8s/day-07-otel-collector-values.yaml
 fullnameOverride: otel-collector
 mode: deployment
 replicaCount: 1
@@ -18,12 +19,7 @@ image:
   repository: otel/opentelemetry-collector-k8s
 
 nodeSelector:
-  ailab/role: observability
-tolerations:
-  - key: ailab/role
-    operator: Equal
-    value: observability
-    effect: NoSchedule
+  kubernetes.io/hostname: gpu-node
 
 resources:
   requests:

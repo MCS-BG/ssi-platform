@@ -6,7 +6,7 @@
 # Needs MagicDNS and HTTPS enabled for the tailnet. Only port 443 and Prefix paths are supported.
 # Docs: https://tailscale.com/docs/kubernetes-operator/ingress
 # Apply (after the operator is running):
-#   kubectl apply -f ~/ssi-platform/k8s/day-08b-tailscale-ingress.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-08b-tailscale-ingress.yaml
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

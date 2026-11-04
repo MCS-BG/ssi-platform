@@ -40,7 +40,7 @@ data:
 
     Auth (see docs/day-14-m365-mcp.md):
       - Public client app registered in Microsoft Entra for personal Microsoft accounts.
-      - The operator signs in once with apps/m365-mcp/login.py (device code; Microsoft Authenticator
+      - the operator signs in once with apps/m365-mcp/login.py (device code; Microsoft Authenticator
         handles MFA). The script writes an MSAL token cache that goes into the Kubernetes
         Secret m365-mcp-auth. The cache holds the refresh token; it is never in git.
       - At runtime MSAL refreshes access tokens silently from that cache.
@@ -95,7 +95,45 @@ data:
     SCOPES = [s for s in os.environ.get(
         "M365_SCOPES", "User.Read Mail.Read Calendars.Read Files.Read").split() if s]
     # Windows zone names are the safest choice for Graph; "Central Standard Time" follows DST.
-    DEFAULT_TIMEZONE = os.environ.get("M365_TIMEZONE", "Central Standard Time")
+    DEFAULT_TIMEZONE = (os.environ.get("DEFAULT_TIMEZONE") or os.environ.get("M365_TIMEZONE")
+                        or "America/Chicago")
+
+    # Graph's Prefer: outlook.timezone is documented with Windows zone names; send those.
+    IANA_TO_WINDOWS = {
+        "America/Chicago": "Central Standard Time", "America/New_York": "Eastern Standard Time",
+        "America/Denver": "Mountain Standard Time", "America/Phoenix": "US Mountain Standard Time",
+        "America/Los_Angeles": "Pacific Standard Time", "America/Anchorage": "Alaskan Standard Time",
+        "Pacific/Honolulu": "Hawaiian Standard Time", "America/Toronto": "Eastern Standard Time",
+        "America/Winnipeg": "Central Standard Time", "America/Regina": "Canada Central Standard Time",
+        "America/Edmonton": "Mountain Standard Time", "America/Vancouver": "Pacific Standard Time",
+        "America/Halifax": "Atlantic Standard Time", "America/Mexico_City": "Central Standard Time (Mexico)",
+        "Europe/London": "GMT Standard Time", "Europe/Berlin": "W. Europe Standard Time",
+        "Europe/Paris": "Romance Standard Time", "Europe/Oslo": "W. Europe Standard Time",
+        "Asia/Tokyo": "Tokyo Standard Time", "Asia/Kolkata": "India Standard Time",
+        "Australia/Sydney": "AUS Eastern Standard Time", "UTC": "UTC", "Etc/UTC": "UTC",
+    }
+    WINDOWS_ZONES = set(IANA_TO_WINDOWS.values())
+
+
+    def normalize_timezone(value):
+        """Return (windows_name, iana_name) for Graph. 'auto', empty, missing or unknown -> default."""
+        from zoneinfo import ZoneInfo
+        def _iana(v):
+            v = (v or "").strip()
+            if not v or v.lower() in ("auto", "local", "default", "none", "null"):
+                return None
+            for iana, win in IANA_TO_WINDOWS.items():   # Windows name given: map back to IANA
+                if v.lower() == win.lower():
+                    return iana
+            if not re.fullmatch(r"[A-Za-z0-9_+\-/]{1,64}", v):
+                return None
+            try:
+                ZoneInfo(v)
+            except Exception:
+                return None
+            return v if v in IANA_TO_WINDOWS else None   # valid but unmapped: use default, never send Graph a name it may reject
+        iana = _iana(value) or _iana(DEFAULT_TIMEZONE) or "America/Chicago"
+        return IANA_TO_WINDOWS[iana], iana
 
     PROMPT_GUARD_URL = os.environ.get("PROMPT_GUARD_URL", "http://prompt-guard.si-lab.svc.cluster.local:8080/classify")
     PROMPT_GUARD_THRESHOLD = float(os.environ.get("PROMPT_GUARD_THRESHOLD", "0.5"))
@@ -468,13 +506,12 @@ data:
     def m365_list_events(days: int = 7, top: int = 20, timezone: str | None = None) -> dict[str, Any]:
         """List calendar events from now through the next `days` days (1 to 31), soonest first.
 
-        top: 1 to 50. timezone: IANA or Windows time zone name for the start/end times
-        (default from M365_TIMEZONE).
+        top: 1 to 50. timezone: optional; leave it out to use the user's default (America/Chicago,
+        US Central). Only pass an IANA name like America/New_York if the user names a zone.
         """
-        tz = timezone or DEFAULT_TIMEZONE
-        if not re.fullmatch(r"[A-Za-z0-9_+\-/ ]{1,64}", tz):
-            raise ToolError("timezone must be a time zone name such as Central Standard Time or UTC")
-        guard_input("m365_list_events", timezone=timezone)
+        if timezone:
+            guard_input("m365_list_events", timezone=str(timezone)[:64])
+        tz, tz_iana = normalize_timezone(timezone)
         start = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
         end = start + dt.timedelta(days=_clamp(days, 1, 31))
         body = graph_get("/me/calendarView", params={
@@ -499,7 +536,7 @@ data:
                 "show_as": e.get("showAs"),
             })
         return {"source": "microsoft-graph", "window_start": start.isoformat(), "window_end": end.isoformat(),
-                "returned": len(events), "events": events}
+                "time_zone": tz_iana, "returned": len(events), "events": events}
 
 
     def _clean_path(path):
@@ -697,8 +734,8 @@ spec:
               value: /var/run/secrets/m365/token_cache.json
             - name: M365_SCOPES
               value: User.Read Mail.Read Calendars.Read Files.Read
-            - name: M365_TIMEZONE
-              value: Central Standard Time
+            - name: DEFAULT_TIMEZONE  # Day 18: IANA name; 'auto'/invalid from the model falls back here
+              value: America/Chicago
             - name: PROMPT_GUARD_ENABLED
               value: "true"
             - name: PROMPT_GUARD_URL

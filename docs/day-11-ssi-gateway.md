@@ -6,7 +6,7 @@ How to read these steps:
 
 - Every code block has a label above it: **Terminal**.
 - Each block holds one command. No `#` comments inside fences. Quotes are zsh-safe.
-- `kubectl` needs `KUBECONFIG=~/.kube/si-lab.yaml` and the private path to the API (Day 2 / Day 8).
+- `kubectl` needs `KUBECONFIG=~/.kube/k3s-lab.yaml` and the private path to the API (Day 2 / Day 8).
 
 ## Routing table
 
@@ -24,16 +24,16 @@ Auth is a shared secret in Secret `ssi-gateway-auth` (key `token`). Enterprise r
 
 | Environment | How you reach `ssi-gateway` |
 | --- | --- |
-| Home lab | `http://192.0.2.93:30808` from any machine on the home LAN. The Service is a NodePort (30808) on the lab host, so nothing has to run on your laptop. Reserve 192.0.2.93 for the lab host in the router (DHCP reservation); if the IP moves, the endpoint breaks. Fallback only: `kubectl port-forward svc/ssi-gateway 18080:8080`. |
+| Home lab | `http://<lab-lan-ip>:30808` from any machine on the home LAN. The Service is a NodePort (30808) on the lab host, so nothing has to run on your laptop. Reserve <lab-lan-ip> for the lab host in the router (DHCP reservation); if the IP moves, the endpoint breaks. Fallback only: `kubectl port-forward svc/ssi-gateway 18080:8080`. |
 | Enterprise | The same gateway behind an internal load balancer with a private DNS name (for example `https://ssi.company.internal`) and TLS, reached over the company VPN or Private Link. Never the Kubernetes API server: that is the admin endpoint for `kubectl` and deploys, not an app endpoint. |
 
 The lab link is plain HTTP, so the Bearer token crosses the home network unencrypted. That is acceptable for the lab only; the enterprise path always uses TLS.
 
 How the lab NodePort is locked down:
 
-- `externalTrafficPolicy: Local` keeps the caller's real IP, and the NetworkPolicy `ssi-gateway-allow` admits the home LAN (`192.0.2.0/24`) next to the in-cluster callers it already allowed. The node that answers must run the gateway pod (the lab host does).
+- `externalTrafficPolicy: Local` keeps the caller's real IP, and the NetworkPolicy `ssi-gateway-allow` admits the home LAN (`<lan-subnet>`) next to the in-cluster callers it already allowed. The node that answers must run the gateway pod (the lab host does).
 - Every route except `/healthz` still needs the Bearer token.
-- The lab host firewall (ufw) did not need a rule for this: k3s's own forwarding rules accept NodePort traffic. If a request from the LAN times out, run this on the lab host: `sudo ufw allow from 192.0.2.0/24 to any port 30808 proto tcp`.
+- The lab host firewall (ufw) did not need a rule for this: k3s's own forwarding rules accept NodePort traffic. If a request from the LAN times out, run this on the lab host: `sudo ufw allow from <lan-subnet> to any port 30808 proto tcp`.
 
 ## Before you start
 
@@ -42,7 +42,7 @@ Day 10 must be Ready: `control-layer`, `engineering-mcp`, `mcp-server`, `prompt-
 Terminal
 
 ```bash
-export KUBECONFIG=~/.kube/si-lab.yaml
+export KUBECONFIG=~/.kube/k3s-lab.yaml
 ```
 
 Terminal
@@ -116,7 +116,7 @@ TOKEN="$(kubectl -n si-lab get secret ssi-gateway-auth -o jsonpath='{.data.token
 Terminal
 
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" http://192.0.2.93:30808/healthz
+curl -sS -o /dev/null -w "%{http_code}\n" http://<lab-lan-ip>:30808/healthz
 ```
 
 Expected: `200`.
@@ -124,7 +124,7 @@ Expected: `200`.
 Terminal
 
 ```bash
-curl -sS -H "Authorization: Bearer ${TOKEN}" http://192.0.2.93:30808/control/healthz
+curl -sS -H "Authorization: Bearer ${TOKEN}" http://<lab-lan-ip>:30808/control/healthz
 ```
 
 Expected: `ok`.
@@ -132,7 +132,7 @@ Expected: `ok`.
 Terminal
 
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" http://192.0.2.93:30808/control/healthz
+curl -sS -o /dev/null -w "%{http_code}\n" http://<lab-lan-ip>:30808/control/healthz
 ```
 
 Expected: `401` (no Bearer).
@@ -140,7 +140,7 @@ Expected: `401` (no Bearer).
 Terminal
 
 ```bash
-curl -sS -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -d '{}' http://192.0.2.93:30808/control/demo | head -c 400; echo
+curl -sS -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -d '{}' http://<lab-lan-ip>:30808/control/demo | head -c 400; echo
 ```
 
 Expected: JSON with `"ok": true`, `slots_used` including `business` and `engineering`. Prompt Guard still runs inside the control layer (fail closed).
@@ -150,7 +150,7 @@ Fallback if the LAN endpoint is unreachable (for example away from home): run `k
 ## 4. Point the SSI Connector at the lab endpoint
 
 1. Install the VSIX if needed (`docs/ssi-vscode-connector.md`).
-2. Set **`ssi.endpoint`** to `http://192.0.2.93:30808` (no trailing slash).
+2. Set **`ssi.endpoint`** to `http://<lab-lan-ip>:30808` (no trailing slash).
    - Fallback only: `http://127.0.0.1:18080` while a `kubectl port-forward svc/ssi-gateway 18080:8080` is running.
 3. **SSI: Set Token** → paste the Secret value.
 4. **SSI: Connect** → status bar **SSI: Connected**.
@@ -170,7 +170,7 @@ Leave path settings at defaults: `ssi.controlPath=/control`, `ssi.businessMcpPat
 | --- | --- |
 | `apps/ssi-gateway/server.py` | Gateway source (stdlib) |
 | `k8s/day-11-ssi-gateway.yaml` | ConfigMap, Deployment, NodePort Service (30808), NetworkPolicy (LAN ipBlock), optional lab Ingress |
-| `infra/terraform/apps/manifests.tf` | Same objects in OpenTofu; `gateway_service_type`, `gateway_node_port`, `gateway_lan_cidr` (lab-k3s: NodePort 30808, `192.0.2.0/24`; cloud envs: ClusterIP + internal load balancer) |
+| `infra/terraform/apps/manifests.tf` | Same objects in OpenTofu; `gateway_service_type`, `gateway_node_port`, `gateway_lan_cidr` (lab-k3s: NodePort 30808, `<lan-subnet>`; cloud envs: ClusterIP + internal load balancer) |
 | `docs/ssi-vscode-connector.md` | Developer install + Connect |
 | `k8s/day-10-control-layer.yaml` | Upstream `/healthz`, `/ask`, `/demo` |
 | `k8s/day-10-engineering-mcp.yaml` | Upstream engineering `/mcp` |

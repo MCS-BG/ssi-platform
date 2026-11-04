@@ -7,7 +7,7 @@ This lesson is the other question: what people mean by "update the model," which
 ## The lab at a glance
 
 - **Terminal:** `kubectl` through the SSH tunnel that is already open, with the existing `KUBECONFIG`. This lesson does not open a new tunnel.
-- **Lab host:** node `gpu-node` on the k3s cluster. Ollama and Open WebUI run here. The GPU is an NVIDIA laptop GPU with 4 GB of VRAM.
+- **Lab host:** node `gpu-node` on the k3s cluster. Ollama and Open WebUI run here. The GPU is an NVIDIA GeForce NVIDIA laptop GPU with 4 GB of VRAM.
 - **What is serving:** chat is `llama3.2:3b`. Embeddings are `nomic-embed-text`, pinned with keep-alive forever. Both stay as they are.
 - **What fits:** local models stay about 1B to 4B, quantized. A 7B model at 4-bit is the ceiling, and it is tight. This lesson does not fine-tune the model that is serving chat.
 

@@ -7,7 +7,7 @@ By the end of the night I had an embedding model loaded next to the chat model, 
 ## The lab at a glance
 
 - **My terminal:** where I edit manifests and run `kubectl`. The Kubernetes API reaches it through the same SSH tunnel on port 6443 as on days 2 and 3.
-- **Lab host:** a laptop running Ubuntu and single-node k3s `v1.36.4+k3s1`. The GPU is an NVIDIA laptop GPU with 4 GB of video memory. The `si-lab` namespace enforces the baseline Pod Security level.
+- **Lab host:** a GPU laptop running Ubuntu and single-node k3s `v1.36.4+k3s1`. The GPU is an NVIDIA GeForce NVIDIA laptop GPU with 4 GB of video memory. The `si-lab` namespace enforces the baseline Pod Security level.
 - **Already running from day 3:** Ollama as a Deployment with a ClusterIP Service named `ollama` on port 11434, the GPU assigned through the `nvidia` runtime class, and models on the external drive through a static hostPath PersistentVolume. The chat model is `llama3.2:3b`.
 - **Storage:** the internal NVMe drive, which backs k3s' default `local-path` storage class, and the external USB drive, formatted exFAT and mounted at `/mnt/ailab-data`.
 
@@ -167,7 +167,7 @@ Then the claims:
 ```text
 $ kubectl -n si-lab get pvc
 NAME              STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS     VOLUMEATTRIBUTESCLASS   AGE
-data-pgvector-0   Bound    pvc-<uid>   10Gi       RWO            local-path       <unset>                 4m6s
+data-pgvector-0   Bound    pvc-c97f0145-7f73-4de0-b1fb-a70bb57f8e8c   10Gi       RWO            local-path       <unset>                 4m6s
 ollama-models     Bound    ollama-models-pv                           200Gi      RWO            ailab-external   <unset>                 13h
 ```
 
@@ -477,7 +477,7 @@ Sources:
 
 ```text
 $ kubectl -n si-lab exec deploy/rag-worker -- python ask.py "What GPU is in the lab host and how much VRAM does it have?"
-The lab host has an NVIDIA laptop GPU, and it has 4 GB of video memory.
+The lab host has an NVIDIA GeForce NVIDIA laptop GPU, and it has 4 GB of video memory.
 
 Sources:
   0.260  day-03-model-serving.md  `PROCESSOR` is the column that matters, and `100% GPU` is the proof. A...

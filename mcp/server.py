@@ -77,7 +77,7 @@ def search_notes(query: str, k: int = 5) -> dict[str, Any]:
             )
             rows = cur.fetchall()
     except (requests.RequestException, psycopg.Error) as e:
-        # Surface backend problems (Ollama or Postgres unreachable) to the caller.
+        # obs-node backend problems (Ollama or Postgres unreachable) to the caller.
         raise ToolError(f"search_notes backend error: {type(e).__name__}: {e}") from e
     return {
         "query": query,

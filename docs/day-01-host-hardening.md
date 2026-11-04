@@ -145,7 +145,7 @@ Avoid multiline `sed` edits pasted from chat — line wraps produce `unterminate
 | SSH tunnel to services | Private endpoints + Entra | PrivateLink + IAM |
 | Local kubeconfig over SSH | AAD-integrated AKS + least privilege | EKS + IAM authenticator |
 
-Same idea: shrink the attack surface before workloads exist.
+Same idea: shrink the attack obs-node before workloads exist.
 
 ## Next: day 2 (`day-02-secure-k3s`)
 

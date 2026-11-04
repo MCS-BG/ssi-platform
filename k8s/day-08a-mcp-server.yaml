@@ -8,7 +8,7 @@
 # Do not re-apply day-06-mcp.yaml afterwards: it would switch mcp-server back to the old start-up.
 # The image line is pinned to a commit SHA by scripts/pin-images.sh (Day 8a step 7).
 # Apply:
-#   kubectl apply -f ~/ssi-platform/k8s/day-08a-mcp-server.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-08a-mcp-server.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:

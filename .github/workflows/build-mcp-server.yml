@@ -1,5 +1,5 @@
-# CI build check for the mcp-server image: builds apps/mcp-server/ but does not push to ghcr.io. Runs on pushes to main that change apps/mcp-server/ or these workflow files.
-# "Run workflow" on the Actions tab (workflow_dispatch) runs it by hand.
+# Build ghcr.io/<owner>/mcp-server on every push to main that changes apps/mcp-server/ or its workflow files.
+# "Run workflow" on the Actions tab (workflow_dispatch) rebuilds it by hand.
 name: build mcp-server
 
 on:
@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: build-mcp-server
@@ -25,3 +26,4 @@ jobs:
       app: mcp-server
     permissions:
       contents: read
+      packages: write

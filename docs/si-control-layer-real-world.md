@@ -2,13 +2,13 @@
 
 This note matches the poster `diagrams/si-control-layer-real-world.png`. It describes how the control layer replaces Microsoft Copilot UIs in a real deployment, while Power BI stays a separate reporting client on the same warehouse.
 
-The lab has Open WebUI, Prompt Guard, a business MCP sample (`fo_*`), RAG, Ollama, Langfuse, Grafana, plus the Day 10 `control-layer` and the `engineering-mcp` (real GitHub, read-only, Day 16) in namespace `si-lab`.
+The lab has Open WebUI, Prompt Guard, a business MCP sample (`fo_*`), RAG, Ollama, Langfuse, Grafana, plus Day 10 `control-layer` and sample `engineering-mcp` in namespace `si-lab`.
 
 Langfuse and Grafana stay in the architecture as the observability lane. Prefer not to spotlight them in write-ups except when changing an observability endpoint.
 
 ## What replaces what
 
-| monitoring node | Role in this architecture |
+| obs-node | Role in this architecture |
 | --- | --- |
 | Open WebUI | Human chat. A person asks. It is not the agent loop. |
 | Control layer | The only agent loop. Chooses tools, reads results, calls the model again, stops on a budget. This is the agent UI. |
@@ -20,7 +20,7 @@ You do not buy Copilot seats for this path. You do register apps and tokens for 
 
 ## Plain steps of one request
 
-1. A person on a terminal or phone opens Open WebUI over a private network (VPN in the lab; not the public internet).
+1. A person on a terminal or phone opens Open WebUI over Tailscale (private; not the public internet).
 2. Prompt Guard classifies the chat message. If Guard cannot answer, the call stops.
 3. The control layer starts the agent loop (`control-layer` Service in `si-lab`; curl `/demo` or `/ask`). If the request carries a `conversation_id`, it first loads that conversation's recent turns from Postgres (Day 15).
 4. The model proposes tool calls (Day 16: native tool calling with the tools each MCP lists, Ollama or any OpenAI-compatible server). The control layer checks each call against the tool's schema and an allowlist, and checks budget (max tool calls, max tokens). If no valid call comes back, the keyword planner picks the tools instead. See `docs/day-16-real-cross-system-answers.md`.
@@ -90,7 +90,7 @@ The optional data MCP and Power BI can read the same warehouse. That is the shar
 5. Optional data MCP: Postgres financial facts shared with Power BI.
 6. Wire the controller to each MCP base URL; accumulate JSON results in loop state; keep conversation memory in Postgres so follow-ups work (Day 15).
 7. Trace every hop in Langfuse; leave Grafana as ops.
-8. Lock network and secrets (private network only; tokens out of prompts when possible).
+8. Lock network and secrets (Tailscale private; tokens out of prompts when possible).
 9. Prove with a multi-slot sample chat, then swap sample backends for real credentials.
 10. Point Power BI Desktop at the same Postgres/SQL warehouse (gateway only if required).
 

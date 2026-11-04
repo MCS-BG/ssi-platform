@@ -5,7 +5,7 @@
 # Requires: KUBECONFIG set, API tunnel up, namespace si-lab.
 set -euo pipefail
 
-export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/si-lab.yaml}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/k3s-lab.yaml}"
 NS=si-lab
 PIDS=()
 

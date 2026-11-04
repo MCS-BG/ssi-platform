@@ -1,0 +1,55 @@
+# Static local PVs on node gpu-node for the monitoring namespace (phase 2 of the
+# observability move, docs/observability-move.md). Each PV is pre-bound (claimRef) to the
+# exact PVC name the chart/StatefulSet already uses, and keeps storageClassName local-path,
+# so no immutable volumeClaimTemplate has to change. Retain: deleting a PVC never deletes data.
+# Paths live in /srv/observability (ext4 loop image, infra/observability/storage-setup.sh).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-prometheus
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 8Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: monitoring, name: prometheus-kps-prometheus-db-prometheus-kps-prometheus-0}
+  local: {path: /srv/observability/prometheus}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-tempo
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 5Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: monitoring, name: storage-tempo-0}
+  local: {path: /srv/observability/tempo}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: obs-loki
+  labels: {ailab/storage: observability}
+spec:
+  capacity: {storage: 5Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef: {namespace: monitoring, name: storage-loki-0}
+  local: {path: /srv/observability/loki}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions: [{key: kubernetes.io/hostname, operator: In, values: [d]}]

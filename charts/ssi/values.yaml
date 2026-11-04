@@ -6,7 +6,7 @@ namespace: si-lab
 createNamespace: true
 
 # Private reachability hostname for docs / NOTES (Private Link / internal DNS).
-# The home-lab VPN path is out of the enterprise story.
+# Home-lab Tailscale is out of the enterprise story.
 privateEndpointHostname: ""
 
 # Quiet observability lane (Grafana + Langfuse). Only change when a step updates endpoints.

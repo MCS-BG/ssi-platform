@@ -4,11 +4,11 @@
 Sources (downloaded into icons/src):
   * Ollama, Nomic AI         -> official GitHub org avatars / Ollama logo (via selfh.st icon set)
   * Open WebUI               -> official favicon from github.com/open-webui/open-webui
-  * NVIDIA, Meta, Kubernetes,
-    Ubuntu                   -> brand logos via Iconify (logos / simple-icons / selfh.st sets)
+  * NVIDIA, Apple, Dell, WD,
+    Meta, Kubernetes, Ubuntu -> brand logos via Iconify (logos / simple-icons / thesvg / selfh.st sets)
   * k8s kind badges, k3s, containerd, Python, PostgreSQL, Helm -> bundled with the `diagrams` package
-Device icons (terminal laptop, lab host laptop, external USB drive, NVMe SSD, GPU chip, SSH terminal)
-are generic illustrations: no device vendor or model branding.
+Device icons (laptop, GPU laptop, external USB drive drive, NVMe SSD, NVIDIA GPU chip, SSH terminal) are
+composites: a device illustration with the real vendor logo placed on it.
 """
 import io, os, re, subprocess, urllib.request
 from pathlib import Path
@@ -24,11 +24,14 @@ FONT_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 FONT_M = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 
 ICONIFY = {
+    "apple_white": "simple-icons/apple.svg?color=%23ffffff",
+    "dell_white": "simple-icons/dell.svg?color=%23ffffff",
     "nvidia_mark": "selfhst/nvidia.svg",
     "nvidia_wordmark": "logos/nvidia.svg",
     "meta": "logos/meta-icon.svg",
     "kubernetes": "logos/kubernetes.svg",
     "ubuntu": "logos/ubuntu.svg",
+    "wd": "thesvg-color/western-digital.svg",
     "ollama": "selfhst/ollama.svg",
     "laptop": "fluent-emoji-flat/laptop.svg",
     "key": "fluent-emoji-flat/key.svg",
@@ -98,14 +101,11 @@ def main():
         src[fn] = fetch(url, SRC / fn)
     K8S = RES / "k8s"
 
-    # ---- laptops: fluent laptop illustration, black bezel, generic screen (no vendor logo)
+    # ---- laptops: fluent laptop illustration, black bezel, vendor logo on screen
     def laptop(screen_fill, logo_key, name, extra_badge=None, logo_w=150):
         im = svg_png(src["laptop"], 512, text_sub=[("#7167a4", "#1d1d1f"), ("#26c9fc", screen_fill)])
-        if logo_key:
-            logo = svg_png(src[logo_key], logo_w)
-            paste_c(im, fit(logo, logo_w), 256, 172)
-        else:  # terminal prompt glyph
-            ImageDraw.Draw(im).text((256, 172), ">_", font=ImageFont.truetype(FONT_M, 110), fill="#ffffff", anchor="mm")
+        logo = svg_png(src[logo_key], logo_w)
+        paste_c(im, fit(logo, logo_w), 256, 172)
         if extra_badge:
             b = fit(svg_png(src[extra_badge], 150), 150)
             im.alpha_composite(b, (512 - 150 - 4, 512 - 150 - 36))
@@ -114,12 +114,14 @@ def main():
     lap = src["laptop"].read_text()
     def lap_grad(c1, c2):
         return lap.replace("<g fill=\"none\">", f"<defs><linearGradient id=\"g\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\"><stop offset=\"0\" stop-color=\"{c1}\"/><stop offset=\"1\" stop-color=\"{c2}\"/></linearGradient></defs><g fill=\"none\">")
-    (SRC / "laptop_terminal.svg").write_text(lap_grad("#3a6ea5", "#1b2a4a"))
-    (SRC / "laptop_labhost.svg").write_text(lap_grad("#e95420", "#5e2750"))
-    src["laptop"] = SRC / "laptop_terminal.svg"; laptop("url(#g)", None, "terminal_laptop.png")
-    src["laptop"] = SRC / "laptop_labhost.svg"; laptop("url(#g)", "ubuntu", "labhost_laptop.png", logo_w=150)
+    (SRC / "laptop_mac.svg").write_text(lap_grad("#3a6ea5", "#1b2a4a"))
+    (SRC / "laptop_gpu.svg").write_text(lap_grad("#e95420", "#5e2750"))
+    src["laptop"] = SRC / "laptop_mac.svg"; laptop("url(#g)", "apple_white", "laptop_m1.png", logo_w=130)
+    src["laptop"] = SRC / "laptop_gpu.svg"; laptop("url(#g)", "dell_white", "dell_xps15.png", "ubuntu", logo_w=160)
 
-    # ---- external USB drive (generic black slab, no vendor branding)
+    # ---- external USB drive portable drive (black slab + real WD logo, white wordmark)
+    wd = SRC / "wd.svg"
+    wd_white = svg_png(wd, 250, text_sub=[('fill="#000"', 'fill="#ffffff"')])
     c = Image.new("RGBA", (512, 512), (0, 0, 0, 0)); d = ImageDraw.Draw(c)
     # USB cable
     d.line([(256, 20), (256, 70)], fill="#3a3a3a", width=16)
@@ -127,10 +129,10 @@ def main():
     d.rounded_rectangle([96, 90, 416, 496], 34, fill="#1a1a1a")
     d.rounded_rectangle([104, 98, 408, 488], 28, fill="#262626")
     d.rounded_rectangle([104, 98, 408, 180], 28, fill="#303030")
-    d.text((256, 290), "USB", font=ImageFont.truetype(FONT_B, 72), fill="#ffffff", anchor="mm")
-    d.text((256, 380), "data disk", font=ImageFont.truetype(FONT_B, 34), fill="#bdbdbd", anchor="mm")
+    paste_c(c, wd_white, 256, 290)
+    d.text((256, 400), "Elements", font=ImageFont.truetype(FONT_B, 34), fill="#bdbdbd", anchor="mm")
     d.ellipse([370, 450, 384, 464], fill="#4fc3f7")  # activity LED
-    shadow(c, 10, (0, 8), 80).save(ICONS / "usb_drive.png")
+    shadow(c, 10, (0, 8), 80).save(ICONS / "wd_elements.png")
 
     # ---- NVMe M.2 SSD (internal) drawn at an angle
     s = Image.new("RGBA", (560, 170), (0, 0, 0, 0)); d = ImageDraw.Draw(s)
@@ -152,7 +154,7 @@ def main():
     c = Image.new("RGBA", (512, 512), (0, 0, 0, 0)); paste_c(c, fit(s, 500), 256, 256)
     shadow(c, 8, (0, 8), 70).save(ICONS / "nvme_ssd.png")
 
-    # ---- GPU chip (mobile GPU = soldered die, not a card)
+    # ---- NVIDIA NVIDIA GPU chip (mobile GPU = soldered die, not a card)
     c = Image.new("RGBA", (512, 512), (0, 0, 0, 0)); d = ImageDraw.Draw(c)
     for i in range(9):
         p = 104 + i * 38
@@ -161,8 +163,8 @@ def main():
     d.rounded_rectangle([76, 76, 436, 436], 26, fill="#1b1b1b")
     d.rounded_rectangle([96, 96, 416, 416], 18, outline="#76b900", width=6, fill="#232323")
     mark = fit(svg_png(src["nvidia_mark"], 200), 190); paste_c(c, mark, 256, 222)
-    d.text((256, 368), "GPU", font=ImageFont.truetype(FONT_B, 54), fill="#ffffff", anchor="mm")
-    shadow(c, 8, (0, 6), 70).save(ICONS / "gpu_chip.png")
+    d.text((256, 368), "RTX", font=ImageFont.truetype(FONT_B, 54), fill="#ffffff", anchor="mm")
+    shadow(c, 8, (0, 6), 70).save(ICONS / "nvidia_rtx_gpu.png")
 
     # ---- SSH tunnel: terminal window + key
     c = Image.new("RGBA", (512, 512), (0, 0, 0, 0)); d = ImageDraw.Draw(c)
@@ -175,14 +177,6 @@ def main():
     d.text((80, 280), "-L 6443", font=ImageFont.truetype(FONT_M, 46), fill="#8be9fd")
     key = fit(svg_png(src["key"], 220), 210); c.alpha_composite(key, (290, 290))
     shadow(c, 8, (0, 6), 70).save(ICONS / "ssh_tunnel.png")
-
-    # ---- private network: generic padlock (no VPN vendor branding)
-    c = Image.new("RGBA", (512, 512), (0, 0, 0, 0)); d = ImageDraw.Draw(c)
-    d.arc([146, 40, 366, 300], 180, 360, fill="#475569", width=44)
-    d.line([(168, 170), (168, 240)], fill="#475569", width=44); d.line([(344, 170), (344, 240)], fill="#475569", width=44)
-    d.rounded_rectangle([96, 220, 416, 480], 36, fill="#1e3a8a")
-    d.ellipse([226, 300, 286, 360], fill="#ffffff"); d.rectangle([246, 340, 266, 410], fill="#ffffff")
-    shadow(c, 8, (0, 6), 70).save(ICONS / "private_network.png")
 
     # ---- workloads: real app logos + official k8s kind badge
     logo_with_badge(svg_png(src["ollama"], 400), K8S / "compute/deploy.png", "ollama_deploy.png", 0.74)
@@ -209,6 +203,7 @@ def main():
     svg_png(src["kubernetes"], 512, ICONS / "kubectl.png")
     svg_png(src["globe"], 512, ICONS / "browser.png")
     svg_png(src["ubuntu"], 512, ICONS / "ubuntu.png")
+    svg_png(src["apple_white"], 512, ICONS / "apple_white.png")
     print("icons written to", ICONS)
 
 if __name__ == "__main__":

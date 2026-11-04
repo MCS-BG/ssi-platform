@@ -8,7 +8,7 @@ It joined as a CPU-only k3s **agent** (a worker), named `obs-node` in Kubernetes
 
 - **My terminal:** where I run `kubectl` through the SSH tunnel to the k3s API, and where I start SSH sessions to both machines.
 - **Lab host:** Ubuntu 26.04.1 with k3s `v1.36.4+k3s1`, node `gpu-node`. It's the control plane and has the GPU. Ollama, pgvector, `rag-worker`, Open WebUI, `mcp-server`, and `fo-mock` all run here.
-- **Monitoring node (new):** a spare laptop with 16 GB of RAM, running Ubuntu 26.04.1 with kernel `7.0.0-34-generic`. It connects over Wi-Fi only (interface `<wifi-iface>`). It joins as k3s agent `obs-node` and is reserved for day 7.
+- **Monitoring node (new):** a spare laptop with 16 GB of RAM, running Ubuntu 26.04.1 with kernel `7.0.0-34-generic`. It connects over Wi-Fi only (interface `wlp0s20f3`). It joins as k3s agent `obs-node` and is reserved for day 7.
 - **Network:** both machines are on the same home subnet, and the router has a DHCP reservation for each. There's no port forwarding on the router, so nothing is reachable from the internet.
 
 ## Design decisions before touching anything
@@ -46,7 +46,7 @@ Then I copied my key from the terminal.
 Terminal:
 
 ```bash
-ssh-copy-id <obs-node-user>@192.0.2.94
+ssh-copy-id <obs-node-user>@<obs-node-ip>
 ```
 
 With key login working, I disabled password logins with the same drop-in file as on day 1. `sshd -t` checks the configuration before the reload.
@@ -115,10 +115,10 @@ On the lab host, I allowed those ports from the monitoring node only, plus the p
 Lab host:
 
 ```bash
-sudo ufw allow from 192.0.2.94 to any port 6443 proto tcp comment 'k3s api from monitoring node'
-sudo ufw allow from 192.0.2.94 to any port 8472 proto udp comment 'flannel vxlan from monitoring node'
-sudo ufw allow from 192.0.2.94 to any port 10250 proto tcp comment 'kubelet from monitoring node'
-sudo ufw allow from 192.0.2.94 to any port 9100 proto tcp comment 'node-exporter from monitoring node'
+sudo ufw allow from <obs-node-ip> to any port 6443 proto tcp comment 'k3s api from monitoring node'
+sudo ufw allow from <obs-node-ip> to any port 8472 proto udp comment 'flannel vxlan from monitoring node'
+sudo ufw allow from <obs-node-ip> to any port 10250 proto tcp comment 'kubelet from monitoring node'
+sudo ufw allow from <obs-node-ip> to any port 9100 proto tcp comment 'node-exporter from monitoring node'
 sudo ufw allow from 10.42.0.0/16 to any comment 'k3s pods'
 sudo ufw allow from 10.43.0.0/16 to any comment 'k3s services'
 ```
@@ -131,8 +131,8 @@ Monitoring node:
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow OpenSSH
-sudo ufw allow from 192.0.2.71 to any port 8472 proto udp comment 'flannel vxlan from lab host'
-sudo ufw allow from 192.0.2.71 to any port 10250 proto tcp comment 'kubelet from lab host'
+sudo ufw allow from <lab-lan-ip> to any port 8472 proto udp comment 'flannel vxlan from lab host'
+sudo ufw allow from <lab-lan-ip> to any port 10250 proto tcp comment 'kubelet from lab host'
 sudo ufw allow from 10.42.0.0/16 to any comment 'k3s pods'
 sudo ufw allow from 10.43.0.0/16 to any comment 'k3s services'
 sudo ufw --force enable
@@ -143,7 +143,7 @@ Then a reachability test from the monitoring node to the API port. `/ping` needs
 Monitoring node:
 
 ```bash
-curl -sk -o /dev/null -w '%{http_code}\n' https://192.0.2.71:6443/ping
+curl -sk -o /dev/null -w '%{http_code}\n' https://<lab-lan-ip>:6443/ping
 ```
 
 It returned `200`. A timeout or `000` would have meant the lab host rule or the IP was wrong.
@@ -165,11 +165,11 @@ Monitoring node:
 
 ```bash
 uname -r
-ip -4 -br addr show <wifi-iface>
+ip -4 -br addr show wlp0s20f3
 systemctl is-enabled suspend.target
 ```
 
-The kernel was `7.0.0-34-generic`, `<wifi-iface>` was `UP` with the reserved address, and `suspend.target` was still `masked`.
+The kernel was `7.0.0-34-generic`, `wlp0s20f3` was `UP` with the reserved address, and `suspend.target` was still `masked`.
 
 ## Step 4: Move the join token without printing it
 
@@ -194,7 +194,7 @@ Then I relayed it from the lab host to the monitoring node through an SSH pipe. 
 Terminal:
 
 ```bash
-ssh <lab-user>@192.0.2.71 'cat ~/.k3s-join-token && rm -f ~/.k3s-join-token' | ssh <obs-node-user>@192.0.2.94 'umask 077 && cat > ~/.k3s-join-token'
+ssh <lab-user>@<lab-lan-ip> 'cat ~/.k3s-join-token && rm -f ~/.k3s-join-token' | ssh <obs-node-user>@<obs-node-ip> 'umask 077 && cat > ~/.k3s-join-token'
 ```
 
 On the monitoring node, I moved it into a root-only file where the agent will look for it, then removed the temporary copy.
@@ -221,11 +221,11 @@ Monitoring node:
 
 ```bash
 sudo tee /etc/rancher/k3s/config.yaml >/dev/null <<'EOF'
-server: "https://192.0.2.71:6443"
+server: "https://<lab-lan-ip>:6443"
 token-file: "/etc/rancher/k3s/join-token"
 node-name: "obs-node"
-node-ip: "192.0.2.94"
-flannel-iface: "<wifi-iface>"
+node-ip: "<obs-node-ip>"
+flannel-iface: "wlp0s20f3"
 node-label:
   - "ailab/role=observability"
 node-taint:
@@ -275,8 +275,8 @@ sudo k3s kubectl get nodes -o wide
 
 ```plain text
 NAME      STATUS   ROLES           AGE     VERSION        INTERNAL-IP    ...  OS-IMAGE             KERNEL-VERSION             CONTAINER-RUNTIME
-d         Ready    control-plane   47h     v1.36.4+k3s1   192.0.2.71   ...  Ubuntu 26.04.1 LTS   7.0.0-34-generic (amd64)   containerd://2.3.4-k3s1.36
-obs-node   Ready    <none>          2m47s   v1.36.4+k3s1   192.0.2.94   ...  Ubuntu 26.04.1 LTS   7.0.0-34-generic (amd64)   containerd://2.3.4-k3s1.36
+d         Ready    control-plane   47h     v1.36.4+k3s1   <lab-lan-ip>   ...  Ubuntu 26.04.1 LTS   7.0.0-34-generic (amd64)   containerd://2.3.4-k3s1.36
+obs-node   Ready    <none>          2m47s   v1.36.4+k3s1   <obs-node-ip>   ...  Ubuntu 26.04.1 LTS   7.0.0-34-generic (amd64)   containerd://2.3.4-k3s1.36
 ```
 
 Both nodes are `Ready` and run the same k3s version, OS, kernel, and container runtime. The new node's INTERNAL-IP is the reserved address from the config. `ROLES` shows `<none>` for agents, which is normal. That column only reflects `node-role.kubernetes.io/...` labels. My own label shows up with `-L`:

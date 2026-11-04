@@ -195,7 +195,27 @@ locals {
       })
     }))
   }
-  selected = merge(local.selected_raw, local.image_patched)
+  selected_imaged = merge(local.selected_raw, local.image_patched)
+
+  # Cloud clusters (use_host_path_volumes = false): drop the lab's kubernetes.io/hostname
+  # pins, since that node does not exist there. No-op on the lab.
+  pinned_keys = var.use_host_path_volumes ? [] : [
+    for k, d in local.selected_imaged : k
+    if contains(local.workload_kinds, split("/", k)[1]) && contains(keys(try(yamldecode(d).spec.template.spec.nodeSelector, {})), "kubernetes.io/hostname")
+  ]
+  node_unpinned = {
+    for k in local.pinned_keys : k => yamlencode(merge(yamldecode(local.selected_imaged[k]), {
+      spec = merge(yamldecode(local.selected_imaged[k]).spec, {
+        template = merge(yamldecode(local.selected_imaged[k]).spec.template, {
+          spec = merge(
+            { for sk, sv in yamldecode(local.selected_imaged[k]).spec.template.spec : sk => sv if sk != "nodeSelector" },
+            { for sk, sv in { nodeSelector = { for nk, nv in yamldecode(local.selected_imaged[k]).spec.template.spec.nodeSelector : nk => nv if nk != "kubernetes.io/hostname" } } : sk => sv if length(sv) > 0 },
+          )
+        })
+      })
+    }))
+  }
+  selected = merge(local.selected_imaged, local.node_unpinned)
 
   # ---- opt-in patches (no-ops with lab defaults, so the lab text is untouched) ----
 
@@ -227,8 +247,10 @@ locals {
 
   # Dynamic PVCs instead of the lab's static hostPath PVs.
   pvc_sizes = {
-    "si-lab/PersistentVolumeClaim/ollama-models" = var.ollama_models_volume_size
-    "si-lab/PersistentVolumeClaim/rag-docs"      = null
+    "si-lab/PersistentVolumeClaim/ollama-models"      = var.ollama_models_volume_size
+    "si-lab/PersistentVolumeClaim/rag-docs"           = null
+    "si-lab/PersistentVolumeClaim/open-webui-data"    = null
+    "si-lab/PersistentVolumeClaim/prompt-guard-cache" = null
   }
   pvc_patched = {
     for k, size in local.pvc_sizes : k => yamlencode(merge(yamldecode(local.selected[k]), {
@@ -239,6 +261,18 @@ locals {
       )
     }))
     if !var.use_host_path_volumes && contains(keys(local.selected), k)
+  }
+
+  # pgvector's volumeClaimTemplate names the lab's local-path class; cloud envs use storage_class_name.
+  pg_key = "si-lab/StatefulSet/pgvector"
+  pg_patched = var.use_host_path_volumes || var.storage_class_name == null || !contains(keys(local.selected), local.pg_key) ? {} : {
+    (local.pg_key) = yamlencode(merge(yamldecode(local.selected[local.pg_key]), {
+      spec = merge(yamldecode(local.selected[local.pg_key]).spec, {
+        volumeClaimTemplates = [for t in yamldecode(local.selected[local.pg_key]).spec.volumeClaimTemplates : merge(t, {
+          spec = merge(t.spec, { storageClassName = var.storage_class_name })
+        })]
+      })
+    }))
   }
 
   # ssi-gateway Service + NetworkPolicy. The YAML is the lab (NodePort 30808,
@@ -357,6 +391,7 @@ locals {
     local.vllm_docs,
     local.use_ollama && local.ollama_patch_needed ? { "si-lab/Deployment/ollama" = local.ollama_patched } : {},
     local.pvc_patched,
+    local.pg_patched,
     local.gw_svc_patched,
     local.gw_np_patched,
   )

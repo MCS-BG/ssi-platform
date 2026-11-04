@@ -7,7 +7,7 @@
 # - PROMPT_GUARD_FAIL_OPEN  "false": if Prompt Guard is down, tool calls are refused instead of unchecked
 # The image line is pinned to a commit SHA by scripts/pin-images.sh (Day 8b step 4).
 # Apply:
-#   kubectl apply -f ~/ssi-platform/k8s/day-08b-mcp-server.yaml
+#   kubectl apply -f ~/ai-ops-homelab/k8s/day-08b-mcp-server.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:

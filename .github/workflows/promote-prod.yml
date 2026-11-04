@@ -1,0 +1,89 @@
+name: Promote to Prod
+# Gate 2 (human): only the repo owner (the operator) can run this, by hand, for a commit that is on
+# main AND passed staging. Then deploy to si-lab, smoke test, tag vYYYY.MM.DD-N, and publish a
+# GitHub Release with generated notes. Linked issues move to "Done (Prod)".
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit on main to promote (full SHA from the CD Staging run)"
+        required: true
+      confirm:
+        description: "Type PROMOTE to deploy to Prod (si-lab)"
+        required: true
+permissions:
+  contents: write
+  actions: read
+  issues: write
+  pull-requests: read
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+jobs:
+  gate:
+    name: Approval gate
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.v.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA_IN: ${{ inputs.sha }}
+          CONFIRM: ${{ inputs.confirm }}
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "::error::Only $OWNER may promote to Prod (got $ACTOR)"; exit 1; }
+          [[ "$CONFIRM" == "PROMOTE" ]] || { echo "::error::Type PROMOTE to confirm"; exit 1; }
+          SHA=$(git rev-parse --verify "${SHA_IN}^{commit}")
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "::error::$SHA is not on main"; exit 1; }
+          ok=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cd-staging.yml/runs?head_sha=$SHA&status=success" --jq '.total_count')
+          [[ "$ok" -ge 1 ]] || { echo "::error::$SHA has no successful CD Staging run"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Approved by $ACTOR: promote ${SHA:0:12} (staging passed)" >> "$GITHUB_STEP_SUMMARY"
+  deploy:
+    name: Deploy to si-lab (Prod)
+    needs: gate
+    runs-on: [self-hosted, si-lab]  # Prod runner si-lab-runner (user ghrunner)
+    environment:
+      name: prod
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Deploy
+        run: bash scripts/sdlc/deploy.sh prod "${{ needs.gate.outputs.sha }}"
+      - name: Smoke test
+        run: bash scripts/sdlc/smoke.sh prod "${{ needs.gate.outputs.sha }}"
+  release:
+    name: Tag and release
+    needs: [gate, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          day=$(TZ=America/Chicago date +%Y.%m.%d)
+          n=1; while git rev-parse -q --verify "refs/tags/v$day-$n" >/dev/null; do n=$((n+1)); done
+          tag="v$day-$n"
+          gh release create "$tag" --target "$SHA" --generate-notes --title "SI release $tag"
+          echo "Released $tag at ${SHA:0:12}" >> "$GITHUB_STEP_SUMMARY"
+  board:
+    needs: [gate, release]
+    uses: ./.github/workflows/project-sync.yml
+    with:
+      sha: ${{ needs.gate.outputs.sha }}
+      status: Done (Prod)
+      close: true
+    secrets: inherit

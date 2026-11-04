@@ -84,6 +84,18 @@ variable "gateway_allowed_cidrs" {
   default     = ["10.0.0.0/8"]
 }
 
+variable "enable_engineering_mcp_github" {
+  description = "Day 16: engineering MCP on real GitHub data (read-only). Token from app_secrets.github_token (Secret engineering-mcp-github); without it the pod reads public repositories only."
+  type        = bool
+  default     = false
+}
+
+variable "enable_m365_mcp" {
+  description = "Day 14: Microsoft 365 MCP slot. Needs the m365-mcp-auth Secret from a one-time device-code sign-in in this cluster; without it the tools fail closed."
+  type        = bool
+  default     = false
+}
+
 variable "create_secrets" {
   description = "Create the app Secrets from app_secrets. false = create them yourself before apply."
   type        = bool
@@ -91,7 +103,7 @@ variable "create_secrets" {
 }
 
 variable "app_secrets" {
-  description = "Secret values, set in secrets.auto.tfvars (git-ignored). Keys: pgvector_password, webui_secret_key, ssi_gateway_token, grafana_admin_password, langfuse_init_public_key, langfuse_init_secret_key, langfuse_admin_email, langfuse_admin_password, hf_token."
+  description = "Secret values, set in secrets.auto.tfvars (git-ignored). Keys: pgvector_password, webui_secret_key, ssi_gateway_token, grafana_admin_password, langfuse_init_public_key, langfuse_init_secret_key, langfuse_admin_email, langfuse_admin_password, hf_token, github_token."
   type        = map(string)
   default     = {}
   sensitive   = true
